@@ -414,6 +414,9 @@ module alu
       // FXP multiplication operation
       CGRA_ALU_FXPMUL: alu_res_o = fxp_mult_result;
 
+      // Absolute value operation
+      CGRA_ALU_SABS: alu_res_o = abs_result;
+
       // Comparison operations
       CGRA_ALU_BEQ,
       CGRA_ALU_BNE,
@@ -423,6 +426,20 @@ module alu
       default: ; // default case to suppress unique warning
     endcase
   end
+
+  ////////////////////////////////////////////////////////
+  //   ____    _    ____ ____                          //
+  //  / ___|  / \  | __ ) ___|                         //
+  //  \___ \ / _ \ |  _ \___ \                         //
+  //   ___) / ___ \| |_) |__) |                        //
+  //  |____/_/   \_\____/____/                          //
+  //                                                  //
+  ////////////////////////////////////////////////////////
+
+  logic [DP_WIDTH-1:0] abs_result;
+
+  // Two's-complement negation: ~a + 1
+  assign abs_result = operand_a_i[DP_WIDTH-1] ? (~operand_a_i + 1'b1) : operand_a_i;
 
   assign flag_o      = {alu_res_o[DP_WIDTH-1], ~(|alu_res_o)};
   assign br_req_o    = br_req_s;

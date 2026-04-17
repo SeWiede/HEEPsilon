@@ -112,6 +112,7 @@ package cgra_pkg;
   localparam CGRA_ALU_LWI    = 5'b10111;
   localparam CGRA_ALU_SWI    = 5'b11000;
   localparam CGRA_ALU_EXIT   = 5'b11001;
+  localparam CGRA_ALU_SABS   = 5'b11010; // Signed absolute value: result = (a<0) ? -a : a
 
   // Number of columns needed  : 1 bit per column      :  4
   // RCs kernel start address  : clog2(RC_INSTR_N_REG) :  7

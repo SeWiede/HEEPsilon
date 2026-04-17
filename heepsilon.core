@@ -300,6 +300,7 @@ targets:
           - '-CFLAGS "-std=c++11 -Wall -g -fpermissive"'
           - '-LDFLAGS "-pthread -lutil -lelf"'
           - "-Wall"
+          - "-Wno-UNDRIVEN"
 
   pynq-z2:
     <<: *default_target
