@@ -4,7 +4,7 @@
 #include "weightsAndBiasesC.h"
 #include <stdint.h>
 #include <stddef.h>
-#include "data_cpp/data.cpp"
+#include "data_cpp/data.h"
 
 void getWeights(quant_bit_width * weightVec[]){
 

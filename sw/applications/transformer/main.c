@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "main.h"
-#include "data_cpp/signal.cpp"
+#include "data_cpp/signal.h"
 //#include "data_cpp/signal_fft.cpp"
 #include "SYLT-FFT/fft.h"
 #include "weightsAndBiasesC.h"
@@ -44,8 +44,8 @@ void prototype_distances(quant_bit_width* prototypeVec, const quant_bit_width* m
 void transformerInference(quant_bit_width * transformerInput, quant_bit_width * transformerOutput, quant_bit_width* input_normalized, quant_bit_width* qkv, quant_bit_width* intermediate, void * kperf){
     quant_bit_width * weightVec[NUM_LAYERS*(3*NUM_HEAD+5)+5];
     quant_bit_width * biasVec[NUM_LAYERS*(3*NUM_HEAD+5)+5];
-    //getWeights(weightVec);
-    //getBiases(biasVec);
+    getWeights(weightVec);
+    getBiases(biasVec);
     quant_bit_width * clsTokenVector = getClassToken();
     quant_bit_width * posMatrix = getPosEmbedding();
     TransformerBlock* selfatten = createTransformerBlock(D_SEQ, D_MODEL, D_Q, NUM_HEAD, D_FF, weightVec, biasVec, clsTokenVector, posMatrix);

@@ -38,7 +38,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include "cgra_x_heep.h"
+//#include "cgra_x_heep.h"
+#include "heepsilon.h"
 #include "cgra_bitstream.h"
 #include "multiply_cgra.h"
 
