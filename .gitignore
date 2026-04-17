@@ -20,3 +20,7 @@ sw/external/drivers/cgra/cgra.h
 *.vscode*
 *vivado*
 *__pycache__*
+
+# Claude Code tooling
+.claude/
+CLAUDE.md
