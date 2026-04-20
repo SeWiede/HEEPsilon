@@ -24,3 +24,4 @@ sw/external/drivers/cgra/cgra.h
 # Claude Code tooling
 .claude/
 CLAUDE.md
+.aider*

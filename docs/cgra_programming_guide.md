@@ -280,6 +280,97 @@ The CGRA excels at **data-parallel loop bodies** with regular memory access patt
 
 ---
 
+## Resizing the CGRA
+
+The CGRA dimensions are configured at design time via `heepsilon_cfg.hjson`. Rows and columns are **fully independent** — any N×M combination is supported. The following configurations have been validated by running `cgra_check_conf` through Verilator simulation:
+
+| Config | Result |
+|--------|--------|
+| 4×4    | pass   |
+| 8×8    | pass   |
+| 4×8 (4 cols, 8 rows) | pass |
+| 8×4 (8 cols, 4 rows) | pass |
+
+### Configuration parameters
+
+Edit `heepsilon_cfg.hjson`:
+
+```hjson
+cgra: {
+    num_columns: 8      // OBI master ports scale with this
+    num_rows:    8      // IMEM banks scale with this (one bank per row)
+    max_columns: 8      // must equal num_columns (or less to save resources)
+                        // "default" means num_columns — only works if you also
+                        // set num_columns; otherwise update explicitly
+    rcs_num_instr: 32   // instructions per RC per kernel (power of 2, max 32)
+    cmem_bk_depth: default  // = max_columns * rcs_num_instr; increase to store more kernels
+    kmem_depth: 16
+}
+```
+
+**Column limit formula** (before the KMEM word overflows 32 bits):
+```
+max_columns ≤ 2^(32 - log2(rcs_num_instr) - log2(max_columns * rcs_num_instr))
+```
+With defaults (rcs_num_instr=32): up to **20 columns**.
+
+**Row limit**: no architectural constraint. Each row adds one 32-bit × `cmem_bk_depth` IMEM bank.
+
+### What scales automatically
+
+After changing the config, `make mcu-gen` regenerates all derived files:
+
+| File | What changes |
+|------|-------------|
+| `hw/vendor/esl_epfl_cgra/hw/rtl/cgra_pkg.sv` | `N_ROW`, `N_COL`, `MAX_COL_REQ`, KMEM word layout, IMEM depth |
+| `hw/rtl/heepsilon_pkg.sv` | `CGRA_XBAR_NMASTER = num_columns` — OBI bus port array widens |
+| `sw/external/drivers/cgra/cgra.h` | `CGRA_N_COLS`, `CGRA_N_ROWS`, `CGRA_CMEM_BK_DEPTH`, `CGRA_CMEM_TOT_DEPTH` |
+| `hw/vendor/esl_epfl_cgra/util/cgra_bitstream_gen.py` | Python bitstream generator constants |
+
+The hardware crossbar and IMEM banking are fully parametric — no manual RTL edits needed.
+
+### Memory banks
+
+The CPU-side RAM must be large enough to hold the `cgra_cmem_bitstream` array, which is `CGRA_CMEM_TOT_DEPTH × 4` bytes = `num_rows × max_columns × rcs_num_instr × 4` bytes.
+
+| Grid  | CGRA_CMEM_TOT_DEPTH | Bitstream size | Recommended MEMORY_BANKS |
+|-------|---------------------|----------------|--------------------------|
+| 4×4   | 512                 | 2 KB           | 2 (default, 64 KB)        |
+| 8×8   | 2048                | 8 KB           | 6 (192 KB)               |
+
+If the linker reports `.bss will not fit in region ram1`, increase `MEMORY_BANKS`.
+
+### Full rebuild procedure
+
+```bash
+# 1. Edit heepsilon_cfg.hjson (num_columns, num_rows, max_columns)
+
+# 2. Regenerate RTL and linker script
+make mcu-gen MEMORY_BANKS=<N>   # N = number of 32 KB RAM banks needed
+
+# 3. Rebuild the simulator (required — bus port count changed)
+make verilator-sim
+
+# 4. Build and run a test
+make run-verilator PROJECT=cgra_check_conf
+```
+
+> `MEMORY_BANKS` must be passed to **both** `mcu-gen` and the run target, because it controls both the simulated hardware RAM and the linker script that allocates SW data into it. If you run `mcu-gen` with `MEMORY_BANKS=6` the linker script is updated for all subsequent `make app` calls in that session.
+
+### SW compatibility
+
+Applications that are hardcoded for 4×4 will refuse to compile on a different size:
+```c
+#if CGRA_N_COLS != 4 | CGRA_N_ROWS != 4
+  #error The CGRA must have a 4x4 size to run this example
+#endif
+```
+These are: `cgra_fft`, `cgra_func_test`, `cgra_dbl_search`. All other applications in this repo use `CGRA_N_COLS`/`CGRA_N_ROWS` constants and compile on any size.
+
+`cgra_check_conf` is the recommended first validation after any resize — it exercises LWD/SWD and RCT/RCL routing on all RCs without any hardcoded dimension assumptions.
+
+---
+
 ## Generating Bitstreams
 
 ```bash
