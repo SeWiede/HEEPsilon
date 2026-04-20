@@ -34,6 +34,8 @@ This document covers the software side of HEEPsilon: the structure of applicatio
 
 ## Address Map (from `heepsilon.h`)
 
+> For the full CPU address space, memory bank explanation, bus topology, and SRAM vs DRAM rationale see [`memory_architecture.md`](memory_architecture.md).
+
 ```c
 // sw/external/extensions/heepsilon.h
 #define CGRA_START_ADDRESS   (EXT_SLAVE_START_ADDRESS  + 0x000000)  // context memory
