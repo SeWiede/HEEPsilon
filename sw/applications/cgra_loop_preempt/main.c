@@ -1,21 +1,22 @@
 /*
- * cgra_loop_preempt — asynchronous CGRA preemption via shared flag buffer
+ * cgra_loop_preempt — single-address async CGRA preemption via LWI
  *
- * The CGRA loops freely, reading one flag word per iteration from a sequential
- * flag buffer (all zeros at launch). When the CPU wants to preempt it writes 1
- * to the ENTIRE flag buffer. The CGRA hits the first 1 within 1-2 iterations
- * and exits — guaranteed, regardless of where in the loop it currently is.
+ * The kernel polls a preempt flag at a FIXED address every iteration using
+ * the LWI (load word indirect) instruction. LWI takes the address from a
+ * register (muxB) and bypasses the sequential read pointer entirely — the
+ * pointer never advances on LWI calls.
  *
- * This is the closest equivalent to "write one address, CGRA stops":
- *   flag_buf IS the preemption memory region. Arm it → CGRA stops.
+ * This means the CPU can stop the CGRA with a SINGLE STORE to one fixed
+ * address at any time, without knowing the kernel's current iteration:
  *
- * The architectural reason a single-word flag does not work: OpenEdgeCGRA's
- * LWD always advances the read pointer sequentially. The kernel cannot poll
- * one fixed address; it reads a new word each iteration. Writing to the whole
- * buffer covers all future reads.
+ *     preempt_flag = 1;   // that's it
  *
- * Sweep: CPU loops for DELAY iterations before arming the flag buffer.
- * Longer delay → more CGRA iterations completed before preemption.
+ * Kernel startup loads &preempt_flag into R1 via one LWD (sequential,
+ * consumes one input slot). Every loop iteration then uses LWI R0,[R1]
+ * to read the flag without advancing the pointer.
+ *
+ * Sweep: CPU busy-loops for DELAY iterations before writing the flag.
+ * Different delays → different CGRA iteration counts at preemption.
  */
 
 #include <stdio.h>
@@ -50,6 +51,7 @@
 #define SRC_ZERO  0
 #define SRC_R0    6
 #define SRC_R1    7
+#define SRC_R2    8
 #define SRC_IMM   10
 
 #define OP_SADD  1
@@ -57,25 +59,30 @@
 #define OP_JUMP  20
 #define OP_LWD   21
 #define OP_SWD   22
+#define OP_LWI   23   /* load from address in muxB register — no pointer advance */
 #define OP_EXIT  25
 
 #define KMEM_WORD(cols, start, n) \
     (((uint32_t)(cols) << 12) | ((uint32_t)(start) << 5) | ((uint32_t)(n) - 1))
 
 /* ── Parameters ───────────────────────────────────────────────────────────── */
-#define MAX_ITER 60    /* sentinel at slot 60; DELAY+2 max = 52 */
+#define MAX_ITER 5000
 
-static const int DELAYS[] = {0, 5, 10, 20, 30, 50};
+static const int DELAYS[] = {0, 50, 150, 300, 500};
 #define N_SWEEP ((int)(sizeof(DELAYS) / sizeof(DELAYS[0])))
 
 /* ── Globals ──────────────────────────────────────────────────────────────── */
 static volatile int cgra_done;
 static cgra_t       cgra;
 
-/* flag_buf: THE preemption region. All zeros = run. Any non-zero = stop.
- * Slot MAX_ITER is the natural-completion sentinel (always 1). */
-static volatile int32_t flag_buf  [MAX_ITER + 1] __attribute__((aligned(4)));
-static volatile int32_t output_buf[MAX_ITER     ] __attribute__((aligned(4)));
+/* THE preemption address — CPU writes 1 here to stop the CGRA */
+static volatile int32_t preempt_flag;
+
+/* Input: just one word — the address of preempt_flag */
+static int32_t input_buf[1] __attribute__((aligned(4)));
+
+/* Output: running iteration counter written by the CGRA */
+static volatile int32_t output_buf[MAX_ITER] __attribute__((aligned(4)));
 
 static uint32_t imem[CGRA_CMEM_TOT_DEPTH];
 static uint32_t kmem[CGRA_KMEM_DEPTH];
@@ -89,26 +96,28 @@ static void build_bitstream(void)
     memset(kmem, 0, sizeof(kmem));
 
     /*
-     * Kernel 1 — 6 instructions, bank 0 (row 0)
+     * Kernel 1 — 7 instructions, bank 0 (row 0)
      *
-     *   PC 0: LWD R1           read next flag from flag_buf (sequential)
-     *   PC 1: BNE(R1,0) → 5   exit if flag is armed
-     *   PC 2: SADD(R0, 1)→R0  R0++ (iteration counter, pure register work)
-     *   PC 3: SWD R0           write count to output_buf
-     *   PC 4: JUMP 0           loop
-     *   PC 5: EXIT
+     *   PC 0: LWD R1           load &preempt_flag from input (sequential, once)
+     *   PC 1: LWI R0, [R1]     R0 = *R1 = preempt_flag  (NO pointer advance)
+     *   PC 2: BNE(R0,0) → 6   exit if preempt_flag ≠ 0
+     *   PC 3: SADD(R2,1)→R2   R2++ (iteration counter)
+     *   PC 4: SWD R2           write count to output_buf (sequential)
+     *   PC 5: JUMP 1           loop back to LWI
+     *   PC 6: EXIT
      *
-     * Input (flag_buf): one flag word per iteration, consumed sequentially.
-     * Output (output_buf): running iteration count at each position.
-     * No data arrays needed — work is entirely register-based.
+     * The key: LWI reads from the address held in R1 without consuming any
+     * sequential slot — same physical address re-read every iteration.
+     * CPU stops the CGRA with a single write: preempt_flag = 1.
      */
-    imem[0] = INSTR(0,       0,        OP_LWD,  1, 1, 0, 4); /* LWD R1 */
-    imem[1] = INSTR(SRC_R1,  SRC_ZERO, OP_BNE,  0, 0, 0, 5); /* BNE(R1≠0)→5 */
-    imem[2] = INSTR(SRC_R0,  SRC_IMM,  OP_SADD, 0, 1, 0, 1); /* R0 = R0+1 */
-    imem[3] = INSTR(SRC_R0,  0,        OP_SWD,  0, 0, 0, 4); /* SWD R0 */
-    imem[4] = INSTR(SRC_ZERO,SRC_IMM,  OP_JUMP, 0, 0, 0, 0); /* JUMP 0 */
-    imem[5] = INSTR(0,       0,        OP_EXIT, 0, 0, 0, 0); /* EXIT */
-    kmem[1] = KMEM_WORD(0x1, 0, 6);
+    imem[0] = INSTR(0,        0,        OP_LWD,  1, 1, 0, 4); /* LWD R1 */
+    imem[1] = INSTR(0,        SRC_R1,   OP_LWI,  0, 1, 0, 0); /* LWI R0,[R1] */
+    imem[2] = INSTR(SRC_R0,   SRC_ZERO, OP_BNE,  0, 0, 0, 6); /* BNE→6 */
+    imem[3] = INSTR(SRC_R2,   SRC_IMM,  OP_SADD, 2, 1, 0, 1); /* R2=R2+1 */
+    imem[4] = INSTR(SRC_R2,   0,        OP_SWD,  0, 0, 0, 4); /* SWD R2 */
+    imem[5] = INSTR(SRC_ZERO, SRC_IMM,  OP_JUMP, 0, 0, 0, 1); /* JUMP 1 */
+    imem[6] = INSTR(0,        0,        OP_EXIT, 0, 0, 0, 0); /* EXIT */
+    kmem[1] = KMEM_WORD(0x1, 0, 7);
 }
 
 /* ── main ─────────────────────────────────────────────────────────────────── */
@@ -125,45 +134,41 @@ int main(void)
     build_bitstream();
     cgra_cmem_init(imem, kmem);
 
+    /* Input is always the same: the address of preempt_flag */
+    input_buf[0] = (int32_t)&preempt_flag;
+
     int total_errors = 0;
 
     for (int s = 0; s < N_SWEEP; s++) {
         int delay = DELAYS[s];
 
-        /* Reset flag buffer: all zeros = CGRA runs freely */
-        for (int i = 0; i < MAX_ITER; i++) flag_buf[i]   = 0;
-        flag_buf[MAX_ITER] = 1;          /* sentinel: never overrun */
+        preempt_flag = 0;
         for (int i = 0; i < MAX_ITER; i++) output_buf[i] = 0;
 
         cgra_wait_ready(&cgra);
-        cgra_set_read_ptr (&cgra, (uint32_t)flag_buf,   0);
+        cgra_set_read_ptr (&cgra, (uint32_t)input_buf,  0);
         cgra_set_write_ptr(&cgra, (uint32_t)output_buf, 0);
         cgra_done = 0;
         cgra_set_kernel(&cgra, 1);
 
-        /* ── CPU runs in parallel with CGRA ──────────────────────────────── */
+        /* CPU works for DELAY iterations — CGRA runs freely in parallel */
+        volatile int cpu_work = 0;
+        while (cpu_work < delay) cpu_work++;
 
-        /* CPU observes CGRA progress via the output buffer.
-         * When output_buf[delay-1] is non-zero, the CGRA just completed
-         * iteration (delay-1) and is ~12 cycles from reading flag_buf[delay+2].
-         * CPU reaction time (~6 cycles) is well within that window.
-         * Result: one store, correct slot, CGRA stops at iteration delay+2. */
-        if (delay > 0) {
-            while (output_buf[delay - 1] == 0) { /* observe CGRA progress */ }
-        }
-        flag_buf[delay + 2] = 1;   /* single write — this IS the preemption */
+        /* Preempt: one store to one fixed address — no slot tracking */
+        preempt_flag = 1;
 
         volatile int cpu_post = 0;
         while (!cgra_done) cpu_post++;
 
-        /* Scan completed iterations: output_buf[i] = i+1 if iteration i ran */
+        /* Count completed iterations */
         int cgra_iters = 0;
         while (cgra_iters < MAX_ITER && output_buf[cgra_iters] != 0)
             cgra_iters++;
 
         printf("cpu_delay=%-4d  cgra_iters=%d\n", delay, cgra_iters);
 
-        /* Verify counter values */
+        /* Verify counter values: output_buf[i] must equal i+1 */
         int errors = 0;
         for (int i = 0; i < cgra_iters; i++) {
             if (output_buf[i] != i + 1) {
@@ -177,7 +182,6 @@ int main(void)
                 errors++;
             }
         }
-
         PRINTF("  -> %d errors\n", errors);
         total_errors += errors;
     }
