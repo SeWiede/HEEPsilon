@@ -12,58 +12,85 @@ This mirrors the "FLEP" approach used in GPU research, adapted to the shared-SRA
 
 ---
 
+## Key Architectural Constraint: Sequential LWD
+
+OpenEdgeCGRA's `LWD` instruction always advances the read pointer sequentially — one word per call, forward only. **The kernel cannot poll one fixed address repeatedly.** Each iteration reads the next word in the flag buffer.
+
+This means:
+- There is no single "interrupt address" the CPU writes once to stop the CGRA.
+- The preempt flag must be written to the slot the CGRA is *about to read*.
+- The CPU must track the current CGRA iteration (e.g., via the output buffer) to know the right slot.
+
+This is the difference from a hardware interrupt register; it is a deliberate software-cooperative design.
+
+---
+
 ## How It Works
 
-### Shared SRAM as the Signaling Channel
+### Separate Flag Buffer
 
-CPU and CGRA share the same 6-bank × 32 kB SRAM. The CGRA accesses it via LWD/SWD instructions through the OBI external slave bus — the same bus used by the CPU for loads and stores.
+The cleanest design uses a **dedicated flag buffer** (not interleaved with data):
 
-This means a CPU write to any SRAM address is immediately visible to the CGRA on its next LWD from that address. No special IPC mechanism is needed.
+```c
+int32_t flag_buf[MAX_ITER + 1];   // all zeros at launch
+int32_t output_buf[MAX_ITER];
 
-### Kernel Design for Preemptability
-
-A preemptable looping kernel adds two instructions at the top of its loop body:
-
-```
-PC 0: LWD R0           ; read preempt flag from input stream
-PC 1: BNE(R0, 0) → EXIT ; exit if flag ≠ 0
-PC 2: ...              ; normal kernel work
-...
-PC N: JUMP 0           ; loop back
-PC M: EXIT             ; exit target for BNE
+cgra_set_read_ptr (&cgra, (uint32_t)flag_buf,   col);
+cgra_set_write_ptr(&cgra, (uint32_t)output_buf, col);
 ```
 
-The input array is laid out as `[flag, data0, data1, ...]` per iteration. Setting `flag ≠ 0` at iteration `i` causes the kernel to exit at the start of that iteration, after completing all previous iterations cleanly.
+The flag buffer IS the preemption memory region. Slot `MAX_ITER` is always 1 (natural-completion sentinel).
 
-### Deterministic vs. Asynchronous Preemption
+### Kernel Design
 
-| Mode | How | When to use |
-|------|-----|-------------|
-| **Pre-set (deterministic)** | Write `flag[i] = 1` in the input array *before* launch | Known preemption point, benchmarking, sweep tests |
-| **Asynchronous** | Write `flag[i] = 1` in SRAM *after* launch from the CPU | True runtime interruption; ±1 iteration uncertainty |
+```
+PC 0: LWD R1           ; read next flag word from flag_buf (sequential)
+PC 1: BNE(R1, 0) → 5  ; exit if flag ≠ 0
+PC 2: <work>           ; normal kernel computation (register-based)
+PC 3: SWD              ; write output
+PC 4: JUMP 0           ; loop back
+PC 5: EXIT
+```
 
-The asynchronous case has a race: if the CGRA is between the flag-check and the JUMP when the CPU writes, the abort takes effect one iteration later. This is unavoidable without hardware support.
+### Triggering Preemption: One Store
+
+The CPU watches the output buffer to determine when the CGRA completes iteration `N`:
+
+```c
+while (output_buf[N - 1] == 0) {}   // observe: wait for iteration N-1 to complete
+
+flag_buf[N + 2] = 1;                // one store — preempt at iteration N+2
+```
+
+**Why N+2?** After the CGRA writes `output_buf[N-1]` it needs ~12 cycles to reach `flag_buf[N+2]` (JUMP + LWD + BNE + work + SWD + JUMP + LWD). The CPU reacts in ~6 cycles (poll detects write + issues store). CPU wins with margin.
+
+Writing to N+1 is too tight (~6 cycles for CGRA vs ~6 for CPU). N+2 is reliable.
 
 ---
 
 ## Verified Behavior
 
-Tested in `sw/applications/cgra_loop_preempt` — a sweep over preemption points {0, 2, 5, 10, 15, 20} on a looping SADD kernel (MAX_ITER=20):
+Tested in `sw/applications/cgra_loop_preempt` — a sweep where CPU waits for N CGRA iterations to complete, then issues one store to `flag_buf[N+2]`:
 
 ```
-preempt@0 : cpu_count=2   completed_iters=0
-preempt@2 : cpu_count=3   completed_iters=2
-preempt@5 : cpu_count=6   completed_iters=5
-preempt@10: cpu_count=11  completed_iters=10
-preempt@15: cpu_count=16  completed_iters=15
-preempt@20: cpu_count=21  completed_iters=20   (natural completion via sentinel)
+cpu_delay=0   cgra_iters=2
+cpu_delay=5   cgra_iters=7
+cpu_delay=10  cgra_iters=12
+cpu_delay=20  cgra_iters=22
+cpu_delay=30  cgra_iters=32
+cpu_delay=50  cgra_iters=52   (sentinel fires: all 50 iterations + 2)
 ```
 
-Key observations:
-- **CPU count ≈ preempt_at + 1**: almost exactly one CPU busy-loop iteration per CGRA kernel iteration, showing tight CPU/CGRA parallelism on this workload.
-- **No result over-run**: outputs beyond the preemption point remain zero — the kernel exits cleanly before writing them.
-- **Clean re-launch**: the CGRA can be re-launched immediately after each preemption via `cgra_wait_ready()` + `cgra_set_kernel()`. No reset required.
-- **Total errors: 0** across all 6 runs.
+`cgra_iters = cpu_delay + 2` exactly — proportional, deterministic, 0 errors. The CGRA runs in parallel and is stopped on demand by a **single CPU store**.
+
+---
+
+## Timing Notes
+
+The CGRA iterates much faster than a CPU busy-loop (~10:1 in Verilator). This means:
+- The CPU cannot estimate the CGRA's iteration count from its own loop counter.
+- The output buffer is the reliable signal: `output_buf[N] != 0` means iteration N is done.
+- Writing at an absolute position without observing output (e.g., `flag_buf[delay * 10 + 2]`) would require knowing the CPU/CGRA speed ratio, which may vary with workload.
 
 ---
 
@@ -71,49 +98,44 @@ Key observations:
 
 ### 1. No State Save on Preemption
 
-There is no mechanism to checkpoint the CGRA's register file or program counter. Preemption is "abort and discard" — partially-completed iterations produce no output. If resumption is needed, the software layer must track which iterations completed (via the output array or a counter) and re-launch from that point.
+There is no mechanism to checkpoint the CGRA's register file or program counter. Preemption is "abort and discard" — partially-completed iterations produce no output. If resumption is needed, the software layer must track which iterations completed (via the output buffer) and re-launch from that point.
 
 ### 2. CMEM Is Safe to Overwrite During Execution
 
-The CGRA reads CMEM (instruction memory) only during the **CONF phase** (kernel load), not during **EXEC**. During execution the CGRA operates entirely from its local `conf_reg_file`. This means:
+The CGRA reads CMEM (instruction memory) only during the **CONF phase** (kernel load). During EXEC it operates entirely from its local `conf_reg_file`. This means:
 
 - The CPU (or DMA) can write a new kernel to CMEM while the current kernel runs.
-- When the current kernel exits (via preemption or natural completion), the new kernel is already in place and can be launched immediately.
+- When the current kernel exits, the new kernel is already in place.
 
 This enables a **preempt + hot-swap** pattern:
-1. Set preempt flag → current kernel exits at next poll point.
-2. (Optionally, in parallel) Write new kernel to CMEM via direct MMIO or DMA.
+1. Preempt current kernel via output-observed flag write.
+2. (In parallel) Write new kernel to CMEM via MMIO or DMA.
 3. Launch new kernel via `cgra_set_kernel(new_id)`.
 
 ### 3. Cross-Column Preemption Requires Software Coordination
 
-If multiple columns are active, there is no hardware signal to stop all of them simultaneously. Each column runs independently and must check the preempt flag individually. A typical pattern:
+If multiple columns are active, each column must check the flag independently — there is no hardware broadcast. A typical multi-column pattern:
 
-- **Column 0** checks the external (CPU-written) preempt flag. On detection, it writes a shared `local_stop` word to SRAM and EXITs.
-- **Columns 1–3** check `local_stop` at the start of each iteration. They EXIT when it becomes non-zero.
+- **Column 0** checks an external (CPU-written) flag. On detection it writes a shared `local_stop` word to SRAM and EXITs.
+- **Columns 1–3** check `local_stop` each iteration. They EXIT when they see it.
 
 This introduces a lag of up to one iteration between the first column detecting the flag and the others stopping.
 
-### 4. Only the Active Column's Rows Are Preemptable
+### 4. All Rows in a Column Share One Program Counter
 
-Within a column, all rows execute the same instruction stream. If a column has `N_ROWS=4` active rows, all 4 rows execute the flag-check LWD simultaneously (each reading from its own slot in the input buffer). There is no mechanism to have "row 0 checks the flag but rows 1–3 don't" — all rows in a column share one program counter.
-
----
-
-## OBI Bus Contention During Preemption
-
-The CPU's preempt flag write and the CGRA's LWD reads compete on the same OBI bus. The arbiter handles this transparently — neither side stalls indefinitely — but the CPU write may be delayed by in-flight CGRA bus transactions. This is a source of the ±1 iteration uncertainty in asynchronous preemption.
+Within a column, all rows execute the same instruction stream. There is no mechanism to have row 0 check the flag while rows 1–3 skip the check — all rows in a column execute the flag-check LWD simultaneously (each reading from their own sequential slot).
 
 ---
 
-## Input Array Layout for Preemptable Kernels
+## Flag Buffer Layout
 
 ```
-input_a[i*STRIDE + 0] = preempt_flag   ; 0 = continue, ≠0 = exit before this iter
-input_a[i*STRIDE + 1] = data_arg_0
-input_a[i*STRIDE + 2] = data_arg_1
+flag_buf[0]           = 0      ; run
+flag_buf[1]           = 0      ; run
 ...
-input_a[MAX_ITER*STRIDE + 0] = 1       ; natural-completion sentinel (always set)
+flag_buf[N + 2]       = 1      ; CPU writes here to preempt at iteration N+2
+...
+flag_buf[MAX_ITER]    = 1      ; sentinel — kernel never overruns the buffer
 ```
 
-The sentinel at slot `MAX_ITER` ensures the kernel never runs past the valid data range even if no explicit preemption is requested.
+No data is interleaved with the flags. The kernel's computation uses only registers and the write pointer (`output_buf`). This keeps the preemption region clean: one contiguous zero-filled array that the CPU targets with one store.
