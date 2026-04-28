@@ -144,6 +144,19 @@ Branch targets are **absolute** IMEM indices within the kernel (relative to `sta
 
 > **JUMP constraint:** Because the target is an absolute IMEM index, a JUMP kernel must start at `start_add = 0`.
 
+> **One-hot branch constraint (hardware):** In a multi-row column, branch instructions (BEQ/BNE/BLT/BGE/JUMP) are accepted **only if exactly one row issues a branch request** at that cycle (`cgra_rcs.sv` performs a one-hot check on `rcs_br_req_row_s`). If all N rows execute a branch simultaneously the check fails and the branch is **silently dropped** — execution falls through to the next PC with no error.
+>
+> **Rule: only one row may execute a branch/jump instruction.** Assign all branch and loop-back JUMP instructions to row 0 only. Rows 1–N-1 must have NOP (`imem = 0`) at those PCs. Row 0's one-hot request is accepted and all rows follow the new PC together.
+>
+> **Loop pattern for multi-row columns:**
+> ```
+> PC k:   ROW 0 only — SSUB Rctr, 1 → Rctr   (decrement counter)
+> PC k+1: ROW 0 only — BNE(Rctr, 0) → PC_exit (skip jump if done)
+> PC k+2: ROW 0 only — JUMP → PC_loop_top      (backward loop)
+> PC k+3: all rows   — SWD / EXIT
+> ```
+> Rows 1–N-1 have NOP at PCs k, k+1, k+2 (leave `imem[II(r,0,k)]` as 0).
+
 ### Memory Access
 | Op    | Opcode | Description                                                    |
 |-------|--------|----------------------------------------------------------------|
