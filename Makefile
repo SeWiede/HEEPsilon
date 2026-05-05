@@ -80,7 +80,7 @@ run-verilator:
 run-questasim:
 	$(MAKE) app PROJECT=$(PROJECT)
 	cd ./build/eslepfl_systems_heepsilon_0/sim-modelsim; \
-	make run PLUSARGS="c firmware=../../../sw/build/main.hex"; \
+	make run PLUSARGS="c firmware=../../../sw/build/main.hex" VSIM_USER_OPTIONS="-suppress vopt-7061"; \
 	cat uart0.log; \
 	cd ../../..;
 

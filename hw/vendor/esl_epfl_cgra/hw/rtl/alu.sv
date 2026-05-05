@@ -382,6 +382,9 @@ module alu
   //                                                    //
   ////////////////////////////////////////////////////////
 
+  logic [DP_WIDTH-1:0] abs_result;
+  assign abs_result = operand_a_i[DP_WIDTH-1] ? (~operand_a_i + 1'b1) : operand_a_i;
+
   always_comb
   begin
     alu_res_o   = '0;
@@ -435,11 +438,6 @@ module alu
   //  |____/_/   \_\____/____/                          //
   //                                                  //
   ////////////////////////////////////////////////////////
-
-  logic [DP_WIDTH-1:0] abs_result;
-
-  // Two's-complement negation: ~a + 1
-  assign abs_result = operand_a_i[DP_WIDTH-1] ? (~operand_a_i + 1'b1) : operand_a_i;
 
   assign flag_o      = {alu_res_o[DP_WIDTH-1], ~(|alu_res_o)};
   assign br_req_o    = br_req_s;

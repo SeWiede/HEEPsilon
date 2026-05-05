@@ -20,3 +20,15 @@ set( CMAKE_CXX_COMPILER_WORKS   1 CACHE INTERNAL "" )
 ```
 
 This replaces the deprecated `CMAKE_FORCE_C_COMPILER` approach already commented out in that file.
+
+## QuestaSim 2022.4_5 compatibility
+
+Two fixes were needed for QuestaSim that Verilator accepts without complaint:
+
+### 1. Forward declaration in `alu.sv`
+
+QuestaSim requires `logic` declarations to appear before any `always_*` block in the same scope, even when referenced only in a preceding `assign`. `abs_result` was declared after the `always_comb` block. Fixed by moving the declaration and its `assign` to before the block.
+
+### 2. False-positive multi-driver error (vopt-7061)
+
+QuestaSim's optimizer flags `vopt-7061` on generate-loop arrays where each iteration writes to a disjoint index slice — the RTL is correct but QuestaSim cannot prove disjointness at the array level. The warning is suppressible. Fixed by passing `-suppress vopt-7061` via `VSIM_USER_OPTIONS` in `run-questasim`.
