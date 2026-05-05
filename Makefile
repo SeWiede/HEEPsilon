@@ -9,6 +9,9 @@
 
 TARGET 		?= sim
 FPGA_BOARD 	?= pynq-z2
+# SW compilation target for FPGA runs; mirrors FPGA_BOARD but can be overridden.
+# pynq-z1 reuses the pynq-z2 SW target (same clock/memory).
+FPGA_TARGET	?= $(FPGA_BOARD)
 PORT		?= /dev/ttyUSB2
 
 # 1 external domain for the CGRA
@@ -40,7 +43,7 @@ mcu-gen: heepsilon-gen
 	$(PYTHON) util/mcu_gen.py --config configs/general.hjson --cfg_peripherals mcu_cfg.hjson --pads_cfg pad_cfg.hjson  --outdir ../../../tb/ --memorybanks $(MEMORY_BANKS) --tpl-sv ../../../tb/tb_util.svh.tpl
 
 ## Builds (synthesis and implementation) the bitstream for the FPGA version using Vivado
-## @param FPGA_BOARD=nexys-a7-100t,pynq-z2
+## @param FPGA_BOARD=nexys-a7-100t,pynq-z2,pynq-z1
 ## @param FUSESOC_FLAGS=--flag=<flagname>
 vivado-fpga: |venv
 	fusesoc --cores-root . run --no-export --target=$(FPGA_BOARD) $(FUSESOC_FLAGS) --setup --build eslepfl:systems:heepsilon 2>&1 | tee buildvivado.log
@@ -87,14 +90,14 @@ run-questasim:
 
 # Builds the program and uses flash-load to run on the FPGA
 run-fpga:
-	$(MAKE) app PROJECT=$(PROJECT) LINKER=flash_load TARGET=pynq-z2
+	$(MAKE) app PROJECT=$(PROJECT) LINKER=flash_load TARGET=$(FPGA_TARGET)
 	( cd hw/vendor/esl_epfl_x_heep/sw/vendor/yosyshq_icestorm/iceprog && make clean && make all ) ;\
 	$(MAKE) flash-prog ;\
 
 # Builds the program and uses flash-load to run on the FPGA.
 # Additionally opens picocom (if available) to see the output.
 run-fpga-com:
-	$(MAKE) app PROJECT=$(PROJECT) LINKER=flash_load TARGET=pynq-z2
+	$(MAKE) app PROJECT=$(PROJECT) LINKER=flash_load TARGET=$(FPGA_TARGET)
 	( cd hw/vendor/esl_epfl_x_heep/sw/vendor/yosyshq_icestorm/iceprog && make clean && make all ) ;\
 	$(MAKE) flash-prog ;\
 	picocom -b 115200 -r -l --imap lfcrlf $(PORT)

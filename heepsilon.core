@@ -115,6 +115,16 @@ filesets:
     - hw/fpga/constraints/pynq-z2/constraints.xdc
     file_type: xdc
 
+  ip-fpga-pynq-z1:
+    files:
+    - hw/fpga_cgra/scripts/pynq-z1/xilinx_generate_clk_wizard.tcl: { file_type: tclSource }
+
+  xdc-fpga-pynq-z1:
+    files:
+    - hw/fpga_cgra/constraints/pynq-z1/pin_assign.xdc
+    - hw/fpga_cgra/constraints/pynq-z1/constraints.xdc
+    file_type: xdc
+
   xdc-fpga-zcu104:
     files:
     - hw/fpga_cgra/constraints/zcu104/pin_assign.xdc
@@ -323,6 +333,28 @@ targets:
         part: xc7z020clg400-1
         board_part: tul.com.tw:pynq-z2:part0:1.0
         board_repo_paths: [../../../hw/fpga/board_files/vendor/esl_epfl_pynq_z2_board_files]
+    toplevel: [xilinx_heepsilon_wrapper]
+
+  pynq-z1:
+    <<: *default_target
+    default_tool: vivado
+    description: Digilent PYNQ-Z1 Board
+    filesets_append:
+    - x_heep_system
+    - rtl-fpga
+    - ip-fpga-pynq-z1
+    - xdc-fpga-pynq-z1
+    - ext_bus
+    parameters:
+    - COREV_PULP
+    - FPU
+    - X_EXT
+    - SYNTHESIS=true
+    - REMOVE_OBI_FIFO
+    - FPGA_SYNTHESIS=true
+    tools:
+      vivado:
+        part: xc7z020clg400-1
     toplevel: [xilinx_heepsilon_wrapper]
 
   zcu104:
