@@ -2,7 +2,7 @@
 
 ## One-time setup (user)
 
-- [x] Install **Vivado WebPACK 2022.2** — installed at `$HOME/tools/xilinx/2022.2/`
+- [x] Install **Vivado WebPACK 2022.2** — installed at `$HOME/tools/Xilinx/Vivado/2022.2/`
 - [x] Install Xilinx cable drivers — done (`52-xilinx-*.rules` installed)
 
 - [x] Install **OpenOCD 0.11.0-rc2** — the exact version tested by X-HEEP docs; build from source:
@@ -35,6 +35,12 @@
 
 - [x] Install picocom
 
+- [x] Install **`gdb-multiarch`** — the RISC-V toolchain 2022.01.17 does NOT include GDB:
+  ```bash
+  sudo apt install gdb-multiarch
+  ```
+  Use `gdb-multiarch` everywhere the docs say `riscv32-unknown-elf-gdb`.
+
 ---
 
 ## JTAG options — pick one
@@ -45,7 +51,7 @@ Three supported ways to connect OpenOCD to the soft RISC-V core (ordered easiest
 |---|---|---|---|
 | **A. Digilent HS2 cable** | HS2 cable wired to PMOD B | `tb/core-v-mini-mcu-nexsys-hs2.cfg` | Cleanest; existing confirmed config |
 | **B. EPFL Programmer** | FT4232H programmer to PMOD B | `tb/core-v-mini-mcu-pynq-z2-esl-programmer.cfg` | Existing confirmed config |
-| **C. Onboard USB bscan** | Just the USB cable | `tb/core-v-mini-mcu-pynq-z1-bscan.cfg` | No extra hardware; config unverified (see uncertainties) |
+| **C. Onboard USB bscan** | Just the USB cable | `tb/core-v-mini-mcu-pynq-z1-bscan.cfg` | **Confirmed working** — requires `use_bscane_xilinx` flag at build time (see below) |
 
 PMOD B pin mapping (from our XDC): TCK=W16, TMS=T11, TRST=W19, TDI=Y14, TDO=V12
 
@@ -59,8 +65,9 @@ dmesg --time-format iso | grep FTDI
 ## Build + run steps (first time)
 
 - [ ] `make mcu-gen` — generate RTL (run once, or after config changes)
-- [ ] `make vivado-fpga FPGA_BOARD=pynq-z1` — synthesis + bitstream (~1 h)
-  - Bitstream path: `build/eslepfl_systems_heepsilon_0/pynq-z1-vivado/` — confirm exact filename after first run
+- [ ] `make vivado-fpga FPGA_BOARD=pynq-z1 FUSESOC_FLAGS=--flag=use_bscane_xilinx` — synthesis + bitstream (~1 h)
+  - **`use_bscane_xilinx` is required** for onboard USB JTAG (option C). Without it the RISC-V debug module is unreachable through the Xilinx JTAG chain (`dtmcontrol` reads 0). See "How BSCANE2 works" below.
+  - Bitstream path: `build/eslepfl_systems_heepsilon_0/pynq-z1-vivado/eslepfl_systems_heepsilon_0.bit`
 - [ ] `make app PROJECT=hello_world LINKER=on_chip TARGET=pynq-z1`
 - [ ] Program bitstream via **Vivado Hardware Manager**:
   `Open → Hardware Manager → Open Target → Autoconnect → Program Device`
@@ -77,8 +84,8 @@ dmesg --time-format iso | grep FTDI
   openocd -f hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-pynq-z1-bscan.cfg # option C
   ```
 - [ ] Load + run via GDB:
-  ```
-  $RISCV/bin/riscv32-unknown-elf-gdb sw/build/main.elf
+  ```bash
+  gdb-multiarch sw/build/main.elf   # riscv32-unknown-elf-gdb not included in 2022.01.17 toolchain
   (gdb) set remotetimeout 2000
   (gdb) target remote localhost:3333
   (gdb) load
@@ -88,25 +95,47 @@ dmesg --time-format iso | grep FTDI
 
 ---
 
+## How BSCANE2 / `use_bscane_xilinx` works
+
+The Zynq's onboard USB (FT2232H) exposes a JTAG chain with two taps: the FPGA config tap
+(`0x23727093`) and the ARM DAP (`0x4ba00477`). The FPGA config tap has four reserved "user"
+JTAG instructions (USER1–USER4) for routing custom data into FPGA logic.
+
+**Without `use_bscane_xilinx`:** the RISC-V JTAG port is only wired to PMOD B pins — the USER
+instructions connect to nothing in the fabric, so `dtmcontrol` reads 0 and OpenOCD cannot reach
+the debug module.
+
+**With `use_bscane_xilinx`:** FuseSoC instantiates a Xilinx `BSCANE2` primitive connected to the
+RISC-V debug transport module (DTM). The BSCANE2 intercepts USER2/USER3 instructions and routes
+TDI/TDO through the DTM. The OpenOCD config maps this:
+```
+riscv set_ir dtmcs 0x22   # USER2 (6-bit IR) → RISC-V DTM control register
+riscv set_ir dmi   0x23   # USER3            → RISC-V debug module interface
+```
+This is why the flag is mandatory for the onboard-USB JTAG path. X-HEEP upstream docs describe it
+as "optional" only because you can alternatively use an external JTAG cable on PMOD B instead.
+
+---
+
 ## Uncertainties / things to verify
 
-- [ ] **OpenOCD bscan config (option C) `ftdi_layout_init`**
-  - Currently `0x0088 0x008b` — same as PYNQ-Z2 (TUL board)
-  - PYNQ-Z1 is Digilent-made; if bscan fails at `scan_chain`, try `0x3088 0x1f8b` (Digilent Zybo value)
-  - Workaround: use HS2 cable (option A) which has a confirmed working config
+- [x] **OpenOCD bscan config (option C) `ftdi_layout_init`**
+  - `0x0088 0x008b` confirmed working on PYNQ-Z1 (same Digilent FT2232H family as Z2)
 
 - [ ] **UART port number** — find with `dmesg --time-format iso | grep FTDI` after plugging in
-  - X-HEEP docs use `/dev/ttyUSB2` for pynq-z2; PYNQ-Z1 may differ
+  - On this PC: `/dev/ttyUSB1` (FT2232H channel B). May differ if other USB-serial devices present.
 
-- [ ] **Bitstream fits?** — XC7Z020 has 53K LUTs; 4×4 CGRA + MCU is large
-  - Check utilization report after synthesis; if >85% LUT or timing fails:
-  - Reduce CGRA in `heepsilon_cfg.hjson` (e.g. 4×3 or 3×3) and re-run `mcu-gen`
+- [x] **Bitstream fits?** — 4×4 CGRA + MCU fits on XC7Z020; timing clean (WNS=15.3 ns, WHS=0.013 ns)
 
-- [ ] **`use_bscane_xilinx` flag** — X-HEEP docs mention this flag for bscan builds:
+- [x] **`use_bscane_xilinx` flag** — **confirmed required** for bscan (option C). Without it,
+  `dtmcontrol` reads 0. Always build with:
   ```bash
   make vivado-fpga FPGA_BOARD=pynq-z1 FUSESOC_FLAGS=--flag=use_bscane_xilinx
   ```
-  Unclear if this is required for the bscan OpenOCD config to work; try without first
+
+- [x] **OpenOCD config syntax** — `core-v-mini-mcu-pynq-z1-bscan.cfg` uses old-style OpenOCD
+  0.11.0-rc2 syntax (`ftdi_vid_pid`, `ftdi_channel`, `ftdi_layout_init` with underscores).
+  Newer OpenOCD uses `ftdi vid_pid` etc. (subcommands). Config is correct for 0.11.0-rc2.
 
 ---
 
