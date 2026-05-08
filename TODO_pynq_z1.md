@@ -64,26 +64,32 @@ dmesg --time-format iso | grep FTDI
 
 ## Build + run steps (first time)
 
-- [ ] `make mcu-gen` — generate RTL (run once, or after config changes)
-- [ ] `make vivado-fpga FPGA_BOARD=pynq-z1 FUSESOC_FLAGS=--flag=use_bscane_xilinx` — synthesis + bitstream (~1 h)
+- [x] `make mcu-gen` — generate RTL (run once, or after config changes)
+- [x] `make vivado-fpga FPGA_BOARD=pynq-z1 FUSESOC_FLAGS=--flag=use_bscane_xilinx` — synthesis + bitstream (~1 h)
   - **`use_bscane_xilinx` is required** for onboard USB JTAG (option C). Without it the RISC-V debug module is unreachable through the Xilinx JTAG chain (`dtmcontrol` reads 0). See "How BSCANE2 works" below.
   - Bitstream path: `build/eslepfl_systems_heepsilon_0/pynq-z1-vivado/eslepfl_systems_heepsilon_0.bit`
-- [ ] `make app PROJECT=hello_world LINKER=on_chip TARGET=pynq-z1`
-- [ ] Program bitstream via **Vivado Hardware Manager**:
-  `Open → Hardware Manager → Open Target → Autoconnect → Program Device`
-  select the `.bit` file from the build directory above
-- [ ] Start UART console (9600 baud, same as pynq-z2):
+- [x] `make app PROJECT=hello_world LINKER=on_chip TARGET=pynq-z1`
+- [x] Program bitstream via `program_fpga.tcl` (Vivado batch mode):
   ```bash
-  picocom -b 9600 -r -l --imap lfcrlf /dev/ttyUSB<N>
+  export XILINX_VIVADO="$HOME/tools/Xilinx/Vivado/2022.2" && export PATH="$XILINX_VIVADO/bin:$PATH"
+  vivado -nolog -nojournal -mode batch -source program_fpga.tcl
   ```
-  Replace `<N>` with the port number from `dmesg` output above
-- [ ] Start OpenOCD (use whichever option from the table above):
+- [x] Start UART console — **PYNQ-Z1 UART does NOT go through PROG USB**.
+  The FT2232H UART connects to PS MIO14/15 (ARM UART), not PL pins. The soft RISC-V
+  `uart_tx_o` is on W14 = **PMOD B pin 1**. Requires a USB-TTL adapter (3.3V logic):
+  - Adapter RXD → PMOD B pin 1 (top-left, W14)
+  - Adapter GND → PMOD B pin 5 (GND)
+  - Leave TXD, 3V3, 5V unconnected
+  - FT2232H takes ttyUSB0 + ttyUSB1; adapter appears as ttyUSB2
   ```bash
-  openocd -f hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-nexsys-hs2.cfg   # option A
-  # or
-  openocd -f hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-pynq-z1-bscan.cfg # option C
+  sudo picocom -b 9600 -r -l --imap lfcrlf /dev/ttyUSB2
   ```
-- [ ] Load + run via GDB:
+- [x] Start OpenOCD:
+  ```bash
+  export PATH="$HOME/tools/openocd/bin:$PATH"
+  openocd -f hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-pynq-z1-bscan.cfg
+  ```
+- [x] Load + run via GDB:
   ```bash
   gdb-multiarch sw/build/main.elf   # riscv32-unknown-elf-gdb not included in 2022.01.17 toolchain
   (gdb) set remotetimeout 2000
@@ -91,7 +97,7 @@ dmesg --time-format iso | grep FTDI
   (gdb) load
   (gdb) continue
   ```
-  Expected UART output: `hello world!`
+  Expected UART output: `hello world!` — **confirmed working 2026-05-08**
 
 ---
 

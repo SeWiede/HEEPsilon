@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 #
 # Digilent PYNQ-Z1 pin assignments.
-# The XC7Z020-1CLG400C package is pin-compatible with the PYNQ-Z2; all
-# physical pins used here are identical to the pynq-z2 variant.
+# NOTE: The PYNQ-Z1 FT2232H UART connects to PS MIO14/15 (ARM UART), NOT to
+# PL pins. uart_tx_o (W14) and uart_rx_i (V16) route to PMOD B pin 1 and pin 5
+# respectively — a USB-TTL adapter on PMOD B is required to see UART output.
+# This differs from PYNQ-Z2 where W14/V16 connect directly to the FT2232H.
 
 set_property -dict {PACKAGE_PIN H16 IOSTANDARD LVCMOS33} [get_ports clk_i]
 set_property -dict {PACKAGE_PIN L19 IOSTANDARD LVCMOS33} [get_ports rst_i]
