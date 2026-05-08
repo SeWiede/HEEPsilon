@@ -128,8 +128,16 @@ as "optional" only because you can alternatively use an external JTAG cable on P
 - [x] **OpenOCD bscan config (option C) `ftdi_layout_init`**
   - `0x0088 0x008b` confirmed working on PYNQ-Z1 (same Digilent FT2232H family as Z2)
 
-- [ ] **UART port number** — find with `dmesg --time-format iso | grep FTDI` after plugging in
-  - On this PC: `/dev/ttyUSB1` (FT2232H channel B). May differ if other USB-serial devices present.
+- [x] **UART port number** — use `/dev/serial/by-id/` for a stable name that doesn't depend on plug order:
+  ```bash
+  ls /dev/serial/by-id/
+  ```
+  CP2102 adapter appears as:
+  `usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0`
+  Full picocom command:
+  ```bash
+  sudo picocom -b 9600 -r -l --imap lfcrlf /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
+  ```
 
 - [x] **Bitstream fits?** — 4×4 CGRA + MCU fits on XC7Z020; timing clean (WNS=15.3 ns, WHS=0.013 ns)
 
