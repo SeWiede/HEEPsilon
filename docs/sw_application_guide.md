@@ -210,6 +210,46 @@ static int32_t output[N] __attribute__((aligned(4)));
 
 ---
 
+## GPIO and Pad Mux
+
+X-HEEP has more peripherals than physical pads, so some pads are **shared** between a dedicated peripheral and a GPIO pin. At reset the pad is routed to the peripheral function. If you want to drive it as GPIO you must explicitly switch it first via `pad_control_set_mux()`.
+
+The mapping is defined in `pad_cfg.hjson` (project root of X-HEEP vendor). Each shared pad lists its mux options; option index 0 is the peripheral, index 1 is GPIO. The code generator produces `pad_control_regs.h` with the corresponding `PAD_CONTROL_PAD_MUX_<PAD>_REG_OFFSET` constants.
+
+### Shared pads relevant to PYNQ-Z1
+
+| gpio index | Physical pad | Shared with | Mux constant |
+|---|---|---|---|
+| 18 | — | `pdm2pcm_pdm` | `PAD_CONTROL_PAD_MUX_PDM2PCM_PDM_REG_OFFSET` |
+| 19 | — | `pdm2pcm_clk` | `PAD_CONTROL_PAD_MUX_PDM2PCM_CLK_REG_OFFSET` |
+| 20 | M15 (LD5 Red)   | `i2s_sck` | `PAD_CONTROL_PAD_MUX_I2S_SCK_REG_OFFSET` |
+| 21 | G14 (LD5 Green) | `i2s_ws`  | `PAD_CONTROL_PAD_MUX_I2S_WS_REG_OFFSET`  |
+| 22 | L14 (LD5 Blue)  | `i2s_sd`  | `PAD_CONTROL_PAD_MUX_I2S_SD_REG_OFFSET`  |
+| 23–26 | Arduino | `spi2_cs/sck/sd` | `PAD_CONTROL_PAD_MUX_SPI2_*_REG_OFFSET` |
+| 27–28 | Arduino | `i2c_scl/sda` | `PAD_CONTROL_PAD_MUX_I2C_*_REG_OFFSET` |
+
+GPIO pins 0–17 have dedicated pads and need no mux configuration.
+
+### Pattern
+
+```c
+#include "pad_control.h"
+#include "pad_control_regs.h"
+#include "core_v_mini_mcu.h"   // PAD_CONTROL_START_ADDRESS
+
+pad_control_t pad_ctrl;
+pad_ctrl.base_addr = mmio_region_from_addr((uintptr_t)PAD_CONTROL_START_ADDRESS);
+
+// Switch i2s_sck pad to GPIO mode (select=1) so gpio[20] drives it
+pad_control_set_mux(&pad_ctrl, PAD_CONTROL_PAD_MUX_I2S_SCK_REG_OFFSET, 1);
+```
+
+Do this **before** calling `gpio_config()` on those pins, otherwise the GPIO writes go nowhere.
+
+See `sw/applications/rgb_led/main.c` for a complete working example (LD5 tri-color LED).
+
+---
+
 ## Building and Running
 
 ```bash

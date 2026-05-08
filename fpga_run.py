@@ -451,8 +451,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="fpga_run.py",
         description="PYNQ-Z1 FPGA workflow automation for HEEPsilon.",
     )
-    p.add_argument("--app",    metavar="NAME",
+    p.add_argument("app",      metavar="NAME", nargs="?",
                    help="Application to run (skip interactive menu)")
+    p.add_argument("--app",   metavar="NAME", dest="app_flag",
+                   help=argparse.SUPPRESS)
     p.add_argument("--verify", action="store_true",
                    help="Also run in simulator and compare UART output line-by-line")
     p.add_argument("--sim", choices=["verilator", "questasim"], default="verilator",
@@ -468,6 +470,7 @@ def main() -> None:
     os.chdir(SCRIPT_DIR)
 
     args = build_parser().parse_args()
+    args.app = args.app or args.app_flag
 
     openocd_proc: subprocess.Popen | None = None
     gdb_proc:     subprocess.Popen | None = None
