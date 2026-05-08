@@ -4,9 +4,8 @@
 #
 # Digilent PYNQ-Z1 pin assignments.
 # NOTE: The PYNQ-Z1 FT2232H UART connects to PS MIO14/15 (ARM UART), NOT to
-# PL pins. uart_tx_o (W14) and uart_rx_i (V16) route to PMOD B pin 1 and pin 5
-# respectively — a USB-TTL adapter on PMOD B is required to see UART output.
-# This differs from PYNQ-Z2 where W14/V16 connect directly to the FT2232H.
+# PL pins. uart_tx_o (W14) and uart_rx_i (V16) route to PMOD B — a USB-TTL
+# adapter on PMOD B pin 1 (W14) is required to see UART output.
 
 set_property -dict {PACKAGE_PIN H16 IOSTANDARD LVCMOS33} [get_ports clk_i]
 set_property -dict {PACKAGE_PIN L19 IOSTANDARD LVCMOS33} [get_ports rst_i]
