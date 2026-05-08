@@ -265,5 +265,6 @@ int main(void)
 #ifndef SKIP_NOSABS
     fail |= (cgra2_sad != cpu_sad);
 #endif
+    printf("### DONE ###\n");
     return fail;
 }

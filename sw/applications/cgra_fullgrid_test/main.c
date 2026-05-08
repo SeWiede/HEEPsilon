@@ -427,5 +427,6 @@ int main(void)
     }
 
     PRINTF("\nfinished with %d errors\n", errors);
+    PRINTF("### DONE ###\n");
     return errors ? 1 : 0;
 }

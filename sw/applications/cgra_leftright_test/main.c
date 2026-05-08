@@ -159,5 +159,6 @@ int main(void)
     int ok = (result == expected);
     PRINTF("Left-right pass %s\n", ok ? "PASS" : "FAIL");
     PRINTF("\nfinished with %d errors\n", ok ? 0 : 1);
+    PRINTF("### DONE ###\n");
     return ok ? 0 : 1;
 }

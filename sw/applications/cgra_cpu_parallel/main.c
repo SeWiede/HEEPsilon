@@ -168,5 +168,6 @@ int main(void)
     }
 
     PRINTF("Finished with %d errors\n", errors);
+    PRINTF("### DONE ###\n");
     return errors;
 }

@@ -187,5 +187,6 @@ int main(void)
     }
 
     printf("Total errors: %d\n", total_errors);
+    printf("### DONE ###\n");
     return total_errors;
 }

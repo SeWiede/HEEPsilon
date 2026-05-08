@@ -303,5 +303,6 @@ int main(void)
         PRINTF("%-6s %s\n", names[i], ok ? "PASS" : "FAIL");
     }
     PRINTF("\nfinished with %d errors\n", total_errors);
+    PRINTF("### DONE ###\n");
     return total_errors;
 }

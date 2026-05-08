@@ -312,5 +312,6 @@ int main(void)
     }
 
     printf("CGRA FIR finished with %d errors\n", errors);
+    printf("### DONE ###\n");
     return errors ? EXIT_FAILURE : EXIT_SUCCESS;
 }
