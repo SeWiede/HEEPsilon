@@ -376,28 +376,56 @@ def cleanup(
 
 # ── Step 12: Verilator verification ───────────────────────────────────────────
 
-def verilator_output(app: str) -> str:
-    header(f"Verilator simulation: {app}")
-    cmd = conda_cmd(["make", "run-verilator", f"PROJECT={app}"])
-    result = subprocess.run(cmd, env=ENV, cwd=SCRIPT_DIR)
+CYCLE_COUNT_PATTERNS = (
+    "active cycles",
+    "stall cycles",
+    "CGRA kernel executed",
+    "spent_cy",
+    "cycles:",
+)
+
+def _normalise(text: str) -> list[str]:
+    """Strip \r, drop blank lines, drop cycle-count lines (differ sim vs HW)."""
+    lines = []
+    for line in text.replace("\r", "").splitlines():
+        line = line.rstrip()
+        if not line:
+            continue
+        if any(p in line for p in CYCLE_COUNT_PATTERNS):
+            continue
+        lines.append(line)
+    return lines
+
+_SIM_TARGETS = {
+    "verilator":  ("run-verilator",  "sim-verilator"),
+    "questasim":  ("run-questasim",  "sim-modelsim"),
+}
+
+def sim_output(app: str, simulator: str = "verilator") -> str:
+    make_target, log_dir = _SIM_TARGETS[simulator]
+    header(f"{simulator} simulation: {app}")
+    # Match FPGA build: pass CDEFS=DEBUG so PRINTF()-gated output is visible
+    env = {**ENV, "CDEFS": "DEBUG"}
+    cmd = conda_cmd(["make", make_target, f"PROJECT={app}"])
+    result = subprocess.run(cmd, env=env, cwd=SCRIPT_DIR)
     if result.returncode != 0:
-        err("Verilator simulation failed — skipping comparison.")
+        err(f"{simulator} simulation failed — skipping comparison.")
         return ""
-    uart_log = SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0/sim-verilator/uart0.log"
+    uart_log = SCRIPT_DIR / f"build/eslepfl_systems_heepsilon_0/{log_dir}/uart0.log"
     if uart_log.exists():
         return uart_log.read_text(errors="replace")
-    # Fallback: uart0.log at project root (some configurations)
     alt = SCRIPT_DIR / "uart0.log"
     if alt.exists():
         return alt.read_text(errors="replace")
-    err("uart0.log not found after Verilator run.")
+    err("uart0.log not found after simulation.")
     return ""
 
 def compare_outputs(fpga_out: str, sim_out: str) -> None:
     header("FPGA vs Verilator comparison")
-    fpga_lines = fpga_out.splitlines()
-    sim_lines  = sim_out.splitlines()
-    max_len = max(len(fpga_lines), len(sim_lines))
+    info("Cycle-count lines excluded (expected to differ between sim and HW)")
+    fpga_lines = _normalise(fpga_out)
+    sim_lines  = _normalise(sim_out)
+    max_len = max(len(fpga_lines), len(sim_lines), 1)
     matches = mismatches = 0
     for i in range(max_len):
         fl = fpga_lines[i] if i < len(fpga_lines) else "<missing>"
@@ -426,7 +454,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--app",    metavar="NAME",
                    help="Application to run (skip interactive menu)")
     p.add_argument("--verify", action="store_true",
-                   help="Also run in Verilator and compare UART output line-by-line")
+                   help="Also run in simulator and compare UART output line-by-line")
+    p.add_argument("--sim", choices=["verilator", "questasim"], default="verilator",
+                   help="Simulator to use with --verify (default: verilator)")
     p.add_argument("--skip-flash", action="store_true",
                    help="Skip bitstream flashing (board already programmed); "
                         "uses 'monitor reset halt' via GDB to get a clean CPU state")
@@ -487,11 +517,11 @@ def main() -> None:
         cleanup(openocd_proc, gdb_proc, ser)
         openocd_proc = gdb_proc = ser = None
 
-        # 12. Optional Verilator verify
+        # 12. Optional sim verify
         if args.verify:
-            sim_output = verilator_output(app)
-            if sim_output:
-                compare_outputs(fpga_output, sim_output)
+            sim_out = sim_output(app, simulator=args.sim)
+            if sim_out:
+                compare_outputs(fpga_output, sim_out)
 
         ok("Done.")
 
