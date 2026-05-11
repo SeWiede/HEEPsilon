@@ -152,8 +152,8 @@ def check_bitstream() -> None:
 
 # ── Step 3: Flash bitstream ────────────────────────────────────────────────────
 
-def flash_bitstream() -> None:
-    header("Flashing bitstream")
+def program_bitstream() -> None:
+    header("Programming bitstream")
     cmd = [
         "vivado", "-nolog", "-nojournal", "-mode", "batch",
         "-source", str(SCRIPT_DIR / "program_fpga.tcl"),
@@ -459,9 +459,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Also run in simulator and compare UART output line-by-line")
     p.add_argument("--sim", choices=["verilator", "questasim"], default="verilator",
                    help="Simulator to use with --verify (default: verilator)")
-    p.add_argument("--skip-flash", action="store_true",
-                   help="Skip bitstream flashing (board already programmed); "
+    flash_grp = p.add_mutually_exclusive_group()
+    flash_grp.add_argument("--skip-program", action="store_true",
+                   help="Skip bitstream programming (board already configured); "
                         "uses 'monitor reset halt' via GDB to get a clean CPU state")
+    flash_grp.add_argument("--program", action="store_true",
+                   help="Always program bitstream without prompting")
     p.add_argument("--uart-timeout", metavar="SECS", type=int, default=UART_IDLE_TIMEOUT,
                    help=f"UART idle timeout in seconds (default: {UART_IDLE_TIMEOUT})")
     return p
@@ -483,11 +486,13 @@ def main() -> None:
         # 2. Bitstream check
         check_bitstream()
 
-        # 3. Flash (skip if --skip-flash)
-        if args.skip_flash:
-            info("Skipping bitstream flash (--skip-flash)")
+        # 3. Program (skip if --skip-program, always if --program, else ask)
+        if args.skip_program:
+            info("Skipping bitstream programming (--skip-program)")
+        elif args.program or input("Program bitstream to board? [Y/n] ").strip().lower() not in ("n", "no"):
+            program_bitstream()
         else:
-            flash_bitstream()
+            info("Skipping bitstream programming")
 
         # 4. App selection
         app = pick_app(args.app)
@@ -506,7 +511,7 @@ def main() -> None:
         ser = open_uart(uart_port)
 
         # 9. GDB
-        gdb_proc = start_gdb(reset_first=args.skip_flash)
+        gdb_proc = start_gdb(reset_first=args.skip_program)
 
         # 10. Capture
         header("Running application")
