@@ -25,3 +25,6 @@ sw/external/drivers/cgra/cgra.h
 .claude/
 CLAUDE.md
 .aider*
+
+# Local environment setup (paths are machine-specific)
+env.sh

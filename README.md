@@ -19,6 +19,26 @@ Althought the HEEPsilon team will try to keep the latest version of X-HEEP avail
 
 👉 For the most accurate set-up instructions please refer to the documentation of the [vendorized X-HEEP](https://github.com/esl-epfl/heepsilon/tree/main/hw/vendor/esl_epfl_x_heep).
 
+## Required environment variables
+
+The build system relies on several environment variables that must point to your local tool installations. There is no shared `env.sh` in this repository — paths differ per machine. Set these before invoking any `make` target or `conda run` command.
+
+| Variable | Points to | Used by |
+|---|---|---|
+| `RISCV` | RISC-V toolchain root (e.g. `<prefix>/riscv/2022.01.17`) | Compiler, linker, GDB |
+| `RISCV_XHEEP` | Same as `RISCV` (X-HEEP expects this alias) | X-HEEP Makefile |
+| `MODEL_TECH` | QuestaSim `linux_x86_64/` directory (real ELF binaries, **not** `bin/`) | QuestaSim simulation |
+| `XILINX_VIVADO` | Vivado installation root (e.g. `<prefix>/Xilinx/Vivado/2022.2`) | FPGA synthesis |
+| `PATH` | Must include: Verilator `bin/`, RISC-V `bin/`, `$MODEL_TECH`, Vivado `bin/`, OpenOCD `bin/` | All targets |
+
+The `core-v-mini-mcu` conda environment (providing FuseSoC and Python dependencies) must be active for simulation and code-generation targets.
+
+### Optional
+
+| Variable | Points to | Used by |
+|---|---|---|
+| `SATMAPIT` | [SAT-MapIt](https://github.com/CristianTirelli/SAT-MapIt) repository root | Automatic CGRA kernel mapping |
+
 
 # Behavioural simulations
 
