@@ -119,7 +119,7 @@ def _bitstream_is_fresh() -> bool:
         return False
     if not BUILDVIVADO.exists():
         return False
-    return "--flag=use_bscane_xilinx" in BUILDVIVADO.read_text()
+    return "BSCANE2" in BUILDVIVADO.read_text()
 
 def check_bitstream() -> None:
     header("Bitstream check")
