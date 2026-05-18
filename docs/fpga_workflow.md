@@ -209,124 +209,111 @@ Note: which PMOD B physical pins these map to has not been verified against the 
 
 # FPGA Workflow (ZCU104)
 
-How to build, flash, and run applications on the ZCU104 board (xczu7ev-ffvc1156-2-e).
+How to build and run applications on the ZCU104 board (xczu7ev-ffvc1156-2-e).
 
-## Key difference from PYNQ boards
+## Boot flow
 
-ZCU104 uses a **flash-load workflow**: the software binary is burned to an external SPI flash via iceprog, and the RISC-V core boots from flash automatically after reset. There is no OpenOCD/GDB step required for normal operation.
+ZCU104 uses **on-chip boot** — the same BSCANE2 / OpenOCD / GDB flow as the PYNQ boards.
+The RISC-V ELF is loaded directly over JTAG; no SPI flash or iceprog is involved.
 
-All communication channels go through the **single "USB JTAG UART" cable** (J164, the one and only micro-USB connector on the board). The on-board FT4232H chip multiplexes all four interfaces over it:
+All communication channels go through the **single "USB JTAG UART" cable** (J164, the only
+micro-USB connector on the board). The FT4232H multiplexes all four interfaces over it:
 
 | FT4232H Channel | Linux device | Function |
 |---|---|---|
-| A | (JTAG, no ttyUSB) | JTAG — Vivado hardware manager, bitstream programming |
+| A | (JTAG, no ttyUSB) | JTAG — Vivado programming, OpenOCD/BSCANE2 |
 | B | `if01` | PS UART0 (ARM Cortex-A53) |
 | C | `if02` | PS UART1 (ARM Cortex-A53) |
-| D | **`if03`** | **PL UART** — RISC-V `uart_tx_o` output |
+| D | **`if03`** | **PL UART** — RISC-V UART output |
 
-**No adapter or second cable is needed.** The PL UART comes out on FT4232H channel D (`if03`).
+**No adapter or second cable needed.** JTAG and UART both use the same cable.
 
-The RISC-V `uart_tx_o` is wired to FPGA pin C19 (LVCMOS18, HP bank 28), `uart_rx_i` to A20. The baudrate is **9600** (defined in `sw/device/target/zcu104/x-heep.h`).
+UART pin assignment (UG1267 Table 3-18, HP bank 28, LVCMOS18):
+
+| FPGA pin | Direction | Signal |
+|---|---|---|
+| A20 | FPGA → FT4232H (DDBUS1 RXD) | `uart_tx_o` |
+| C19 | FT4232H (DDBUS0 TXD) → FPGA | `uart_rx_i` |
+
+Baudrate: **9600** (defined in `sw/device/target/zcu104/x-heep.h`; ZCU104 MMCM outputs 15 MHz,
+not the 100 MHz assumed by `heepsilon_clock_config.h`).
 
 ## Dependencies
 
-Same as PYNQ-Z1 plus:
+Same as PYNQ-Z1. No extra tools needed (no iceprog, no flash module).
 
-| Tool | Notes |
-|---|---|
-| iceprog | Built from source during `make run-fpga` (in `hw/vendor/esl_epfl_x_heep/sw/vendor/yosyshq_icestorm/iceprog/`) — needs `libftdi-dev` |
-| External SPI flash module | Connected to ZCU104 via the SPI flash Pmod pins (L10, J9, M10, K9, M8, K8) |
-
-Install libftdi if not present:
-```bash
-sudo apt install libftdi-dev libusb-1.0-0-dev
-```
-
-## 1. Build the bitstream
+## Automated flow (recommended)
 
 ```bash
-conda run -n core-v-mini-mcu make vivado-fpga FPGA_BOARD=zcu104
+python3 fpga_run.py --board zcu104 --gdb hello_world
 ```
 
-No `use_bscane_xilinx` flag is used for ZCU104 (the flash-load flow does not need BSCANE2).
+`--gdb` is required for ZCU104 because it enables the `use_bscane_xilinx` flag that
+instantiates the BSCANE2 primitive needed to reach the RISC-V debug module from FT4232H channel A.
+
+This single command:
+1. Builds bitstream with `use_bscane_xilinx`
+2. Programs the FPGA via Vivado (`program_fpga_zcu104.tcl`)
+3. Builds the app with `LINKER=on_chip TARGET=zcu104`
+4. Starts OpenOCD (BSCANE2 config)
+5. Loads the ELF via GDB
+6. Opens UART and streams output
+
+## Manual step-by-step
+
+### 1. Build the bitstream
+
+```bash
+conda run -n core-v-mini-mcu make vivado-fpga FPGA_BOARD=zcu104 \
+  FUSESOC_FLAGS=--flag=use_bscane_xilinx
+```
 
 Build takes ~1–2 hours. Output:
 ```
 build/eslepfl_systems_heepsilon_0/zcu104-vivado/eslepfl_systems_heepsilon_0.bit
 ```
 
-## 2. Program the bitstream
+### 2. Program the bitstream
 
 ```bash
+export XILINX_VIVADO="$HOME/tools/Xilinx/Vivado/2022.2" && export PATH="$XILINX_VIVADO/bin:$PATH"
 vivado -nolog -nojournal -mode batch -source program_fpga_zcu104.tcl
 ```
 
-Or use the automated script:
-```bash
-python3 fpga_run.py --board zcu104 hello_world
-```
-
-## 3. Build the software application
-
-Use `LINKER=flash_load` and `TARGET=zcu104`:
+### 3. Build the application
 
 ```bash
-conda run -n core-v-mini-mcu make app PROJECT=hello_world LINKER=flash_load TARGET=zcu104
+conda run -n core-v-mini-mcu make app PROJECT=hello_world LINKER=on_chip TARGET=zcu104
 ```
 
-Built binary: `sw/build/main.hex` (used by iceprog).
-
-## 4. Program the SPI flash
-
-**Switch state during flash programming:** all boot switches OFF (RISC-V must not be running to avoid conflicting flash access).
+### 4. Start OpenOCD
 
 ```bash
-conda run -n core-v-mini-mcu make run-fpga PROJECT=hello_world FPGA_BOARD=zcu104
+openocd -f hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-zcu104-bscan.cfg
 ```
 
-Or step by step:
+### 5. Load ELF via GDB
+
 ```bash
-( cd hw/vendor/esl_epfl_x_heep/sw/vendor/yosyshq_icestorm/iceprog && make all )
-conda run -n core-v-mini-mcu make flash-prog
+gdb-multiarch sw/build/main.elf
+(gdb) target extended-remote :3333
+(gdb) load
+(gdb) continue
 ```
 
-iceprog uses FT4232H channel B (`-I B`) and VID:PID `0403:6011`.
-
-## 5. Boot from flash and capture UART
-
-After flash programming:
-
-1. Set the `boot_select_i` switch ON (SW1 switch 2 — enables flash boot mode)
-2. Press the reset button — RISC-V boots from SPI flash
-3. Open UART on FT4232H channel D (interface 3):
+### 6. Monitor UART
 
 ```bash
 picocom -b 9600 -r -l --imap lfcrlf \
   /dev/serial/by-id/usb-Xilinx_JTAG+3Serial_XXXXXXXX-if03-port0
 ```
 
-Replace `XXXXXXXX` with the serial number visible in `ls /dev/serial/by-id/`.
+Replace `XXXXXXXX` with the serial shown by `ls /dev/serial/by-id/`.
 
-For `hello_world`, expected output: `hello world!`
+## External JTAG alternative (Pmod J87)
 
-## Switch reference
-
-| Signal | XDC pin | Meaning when ON (high) |
-|---|---|---|
-| `boot_select_i` | E4 | Boot from SPI flash |
-| `execute_from_flash_i` | D4 | Execute directly from flash (XIP mode — use `flash_exec` linker) |
-
-For `flash_load`: `boot_select_i=1`, `execute_from_flash_i=0`.
-
-## JTAG / GDB debugging (optional, advanced)
-
-The current ZCU104 bitstream does **not** include BSCANE2 (the `use_bscane_xilinx` flag is not set). FT4232H channel A connects to the ARM/PL JTAG chain, not to the RISC-V debug module.
-
-Two paths to RISC-V debugging:
-
-### Option A: External JTAG cable on Pmod J87 (works with current bitstream)
-
-Wire a Digilent HS2 or FTDI FT232H to Pmod J87 (Bank 26, LVCMOS33):
+If BSCANE2 is not available (bitstream built without `use_bscane_xilinx`), wire a Digilent HS2
+to Pmod J87 (Bank 26, LVCMOS33):
 
 | Signal | FPGA pin |
 |---|---|
@@ -336,8 +323,14 @@ Wire a Digilent HS2 or FTDI FT232H to Pmod J87 (Bank 26, LVCMOS33):
 | TDO | J6 |
 | TRST | M9 |
 
-OpenOCD config: `hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-zcu104-bscan.cfg`
+Use `fpga_run.py --board zcu104 --gdb --ext-jtag <app>` or OpenOCD config:
+`hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-zcu104-ext-jtag.cfg`
 
-### Option B: BSCANE2 via onboard FT4232H (requires bitstream rebuild)
+## Troubleshooting
 
-Add `use_bscane_xilinx` to the ZCU104 target in `heepsilon.core` and rebuild. This tunnels the RISC-V JTAG through the PL config tap, accessible via FT4232H channel A — no external cable needed. The OpenOCD config would need the ZynqMP tap chain (ARM DAP irlen=4 + PL config tap irlen=12) and appropriate USER instruction IR values.
+**lsusb shows "Future Technology Devices International, Ltd FT4232H" (0403:6011)** — correct.
+Searching for "FTDI" won't match; always search for "Future Technology" or VID:PID.
+
+**Two XDC files are loaded by Vivado**: `hw/fpga_cgra/constraints/zcu104/pin_assign.xdc`
+(HEEPsilon) and `hw/vendor/esl_epfl_x_heep/hw/fpga/constraints/zcu104/pin_assign.xdc` (vendor).
+Both must assign the same UART pins or the vendor file silently wins.
