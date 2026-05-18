@@ -28,3 +28,9 @@ CLAUDE.md
 
 # Local environment setup (paths are machine-specific)
 env.sh
+
+# Simulation outputs and work artifacts
+*.vcd
+*_backup
+*_backup/
+zcu_backup/
