@@ -63,8 +63,8 @@ module cgra_rcs
   logic [   N_ROW-1:0] gnt_mask [0:N_COL-1];
   logic [   N_ROW-1:0] rvalid_mask [0:N_COL-1];
 
-  logic [-1:N_COL][  DP_WIDTH-1:0] rcs_mesh_res [-1:N_ROW];
-  logic [-1:N_COL][ALU_N_FLAG-1:0] rcs_mesh_flag [-1:N_ROW];
+  logic [N_COL:-1][  DP_WIDTH-1:0] rcs_mesh_res [N_ROW:-1];
+  logic [N_COL:-1][ALU_N_FLAG-1:0] rcs_mesh_flag [N_ROW:-1];
 
   // i,k are usually for the rows and j,l for the columns
   genvar i,j;
@@ -268,6 +268,7 @@ module cgra_rcs
       always_comb begin
         // for each row
         data_add_o[j] = '0; // default value
+        add_inc_o[j]  = '0; // default value to prevent latch
         for (int k=0; k<N_ROW; k++) begin
           if (data_req_gnt_mask[j][k] == 1'b1) begin
             if (data_ind_s[k][j] == 1'b1) begin
