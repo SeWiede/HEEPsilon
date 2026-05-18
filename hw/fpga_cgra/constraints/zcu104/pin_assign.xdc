@@ -35,9 +35,12 @@ set_property -dict {PACKAGE_PIN K9 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd
 set_property -dict {PACKAGE_PIN M8 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd_io[2]}]
 set_property -dict {PACKAGE_PIN K8 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd_io[3]}]
 
-# UART
-set_property -dict {PACKAGE_PIN G8 IOSTANDARD LVCMOS33} [get_ports uart_tx_o]
-set_property -dict {PACKAGE_PIN G6 IOSTANDARD LVCMOS33} [get_ports uart_rx_i]
+# UART — routed to FT4232H channel D (interface 3) on the single "USB JTAG UART" cable.
+# A20 = UART2_TXD_FPGA_RXD → FT4232H DDBUS1 (RXD input, FT4232H receives from FPGA).
+# C19 = UART2_RXD_FPGA_TXD → FT4232H DDBUS0 (TXD output, FT4232H sends to FPGA).
+# Confirmed in UG1267 Table 3-18. Bank 28, LVCMOS18 (1.8 V HP bank).
+set_property -dict {PACKAGE_PIN A20 IOSTANDARD LVCMOS18} [get_ports uart_tx_o]
+set_property -dict {PACKAGE_PIN C19 IOSTANDARD LVCMOS18} [get_ports uart_rx_i]
 
 # JTAG
 set_property -dict {PACKAGE_PIN H8 IOSTANDARD LVCMOS33} [get_ports jtag_tdi_i]
@@ -73,13 +76,6 @@ set_property -dict {PACKAGE_PIN J17 IOSTANDARD LVCMOS18} [get_ports {gpio_io[7]}
 set_property -dict {PACKAGE_PIN H16 IOSTANDARD LVCMOS18} [get_ports {gpio_io[8]}]
 set_property -dict {PACKAGE_PIN G16 IOSTANDARD LVCMOS18} [get_ports {gpio_io[9]}]
 set_property -dict {PACKAGE_PIN G15 IOSTANDARD LVCMOS18} [get_ports {gpio_io[10]}]
-set_property -dict {PACKAGE_PIN F15 IOSTANDARD LVCMOS18} [get_ports {gpio_io[11]}]
-set_property -dict {PACKAGE_PIN F11 IOSTANDARD LVCMOS18} [get_ports {gpio_io[12]}]
-set_property -dict {PACKAGE_PIN E10 IOSTANDARD LVCMOS18} [get_ports {gpio_io[13]}]
-set_property -dict {PACKAGE_PIN B11 IOSTANDARD LVCMOS18} [get_ports {gpio_io[14]}]
-set_property -dict {PACKAGE_PIN A11 IOSTANDARD LVCMOS18} [get_ports {gpio_io[15]}]
-set_property -dict {PACKAGE_PIN B9 IOSTANDARD LVCMOS18} [get_ports {gpio_io[16]}]
-set_property -dict {PACKAGE_PIN B8 IOSTANDARD LVCMOS18} [get_ports {gpio_io[17]}]
 
 # PDM2PCM
 # set_property -dict {PACKAGE_PIN K19 IOSTANDARD LVCMOS18} [get_ports pdm2pcm_clk_io]
