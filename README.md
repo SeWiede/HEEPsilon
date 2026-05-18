@@ -25,7 +25,7 @@ The build system relies on several environment variables that must point to your
 
 | Variable | Points to | Used by |
 |---|---|---|
-| `RISCV` | RISC-V toolchain root (e.g. `<prefix>/riscv/2022.01.17`) | Compiler, linker, GDB |
+| `RISCV` | RISC-V toolchain root (e.g. `<prefix>/riscv/corev-2024.05.30`) | Compiler, linker, GDB |
 | `RISCV_XHEEP` | Same as `RISCV` (X-HEEP expects this alias) | X-HEEP Makefile |
 | `MODEL_TECH` | QuestaSim `linux_x86_64/` directory (real ELF binaries, **not** `bin/`) | QuestaSim simulation |
 | `XILINX_VIVADO` | Vivado installation root (e.g. `<prefix>/Xilinx/Vivado/2022.2`) | FPGA synthesis |

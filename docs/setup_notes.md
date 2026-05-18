@@ -1,8 +1,8 @@
 # Setup Notes
 
-## Verilator 4.210 on g++ 13+
+## Verilator 4.210 on g++ 13+ (historical — project now uses 5.040)
 
-Building from source fails because newer g++ no longer implicitly includes `<memory>`. Pass it explicitly:
+Building 4.210 from source fails because newer g++ no longer implicitly includes `<memory>`. Pass it explicitly:
 
 ```bash
 make -j$(nproc) CXXFLAGS="-std=c++14 -include memory"
