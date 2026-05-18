@@ -20,9 +20,10 @@
 
 MAKE	= make
 
-# Furthermore, a variable HEEP_DIR with the relative path between that directory and the X-HEEP base directory (where this file is lcoated) needs to be exported.
-# This will compute the opposite relative path (from the X-HEEP base directory to where this file is included).
-HEEP_REL_PATH = $(shell realpath --relative-to=$(HEEP_DIR) ".")
+# Furthermore, a variable HEEP_DIR with the relative path between that directory and the X-HEEP base directory (where this file is located) needs to be exported.
+# This computes the opposite relative path (from the X-HEEP base directory to where this file is included).
+# Use Python to avoid GNU-specific `realpath --relative-to`, which is not available on macOS/BSD.
+HEEP_REL_PATH = $(shell python3 -c "import os; print(os.path.relpath(os.path.realpath('.'), os.path.realpath('$(HEEP_DIR)')))")
 
 # This assumes that you are including this file from a directory where you have a "sw" directory.
 # When this path is provided to sw/Makefile, it will be the relative path from there to the uppermost sw directory.

@@ -10,7 +10,7 @@
 module soc_ctrl_reg_top #(
     parameter type reg_req_t = logic,
     parameter type reg_rsp_t = logic,
-    parameter int AW = 5
+    parameter int AW = 6
 ) (
     input logic clk_i,
     input logic rst_ni,
@@ -90,6 +90,20 @@ module soc_ctrl_reg_top #(
   logic [31:0] system_frequency_hz_qs;
   logic [31:0] system_frequency_hz_wd;
   logic system_frequency_hz_we;
+  logic [31:0] xheep_id_qs;
+  logic xheep_ao_peripheral_config_spi_flash_qs;
+  logic xheep_ao_peripheral_config_dma_qs;
+  logic xheep_ao_peripheral_config_pad_control_qs;
+  logic xheep_ao_peripheral_config_gpio_ao_qs;
+  logic xheep_peripheral_config_rv_plic_qs;
+  logic xheep_peripheral_config_spi_host_qs;
+  logic xheep_peripheral_config_gpio_qs;
+  logic xheep_peripheral_config_i2c_qs;
+  logic xheep_peripheral_config_rv_timer_qs;
+  logic xheep_peripheral_config_spi2_qs;
+  logic xheep_peripheral_config_pdm2pcm_qs;
+  logic xheep_peripheral_config_i2s_qs;
+  logic xheep_peripheral_config_uart_qs;
 
   // Register instances
   // R[exit_valid]: V(False)
@@ -307,9 +321,84 @@ module soc_ctrl_reg_top #(
   );
 
 
+  // R[xheep_id]: V(False)
+
+  // constant-only read
+  assign xheep_id_qs = 32'h0;
 
 
-  logic [7:0] addr_hit;
+  // R[xheep_ao_peripheral_config]: V(False)
+
+  //   F[spi_flash]: 0:0
+  // constant-only read
+  assign xheep_ao_peripheral_config_spi_flash_qs = 1'h1;
+
+
+  //   F[dma]: 1:1
+  // constant-only read
+  assign xheep_ao_peripheral_config_dma_qs = 1'h1;
+
+
+  //   F[pad_control]: 2:2
+  // constant-only read
+  assign xheep_ao_peripheral_config_pad_control_qs = 1'h1;
+
+
+  //   F[gpio_ao]: 3:3
+  // constant-only read
+  assign xheep_ao_peripheral_config_gpio_ao_qs = 1'h1;
+
+
+  // R[xheep_peripheral_config]: V(False)
+
+  //   F[rv_plic]: 0:0
+  // constant-only read
+  assign xheep_peripheral_config_rv_plic_qs = 1'h1;
+
+
+  //   F[spi_host]: 1:1
+  // constant-only read
+  assign xheep_peripheral_config_spi_host_qs = 1'h1;
+
+
+  //   F[gpio]: 2:2
+  // constant-only read
+  assign xheep_peripheral_config_gpio_qs = 1'h1;
+
+
+  //   F[i2c]: 3:3
+  // constant-only read
+  assign xheep_peripheral_config_i2c_qs = 1'h1;
+
+
+  //   F[rv_timer]: 4:4
+  // constant-only read
+  assign xheep_peripheral_config_rv_timer_qs = 1'h1;
+
+
+  //   F[spi2]: 5:5
+  // constant-only read
+  assign xheep_peripheral_config_spi2_qs = 1'h1;
+
+
+  //   F[pdm2pcm]: 6:6
+  // constant-only read
+  assign xheep_peripheral_config_pdm2pcm_qs = 1'h0;
+
+
+  //   F[i2s]: 7:7
+  // constant-only read
+  assign xheep_peripheral_config_i2s_qs = 1'h1;
+
+
+  //   F[uart]: 8:8
+  // constant-only read
+  assign xheep_peripheral_config_uart_qs = 1'h1;
+
+
+
+
+  logic [10:0] addr_hit;
   always_comb begin
     addr_hit = '0;
     addr_hit[0] = (reg_addr == SOC_CTRL_EXIT_VALID_OFFSET);
@@ -320,6 +409,9 @@ module soc_ctrl_reg_top #(
     addr_hit[5] = (reg_addr == SOC_CTRL_USE_SPIMEMIO_OFFSET);
     addr_hit[6] = (reg_addr == SOC_CTRL_ENABLE_SPI_SEL_OFFSET);
     addr_hit[7] = (reg_addr == SOC_CTRL_SYSTEM_FREQUENCY_HZ_OFFSET);
+    addr_hit[8] = (reg_addr == SOC_CTRL_XHEEP_ID_OFFSET);
+    addr_hit[9] = (reg_addr == SOC_CTRL_XHEEP_AO_PERIPHERAL_CONFIG_OFFSET);
+    addr_hit[10] = (reg_addr == SOC_CTRL_XHEEP_PERIPHERAL_CONFIG_OFFSET);
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0;
@@ -327,14 +419,17 @@ module soc_ctrl_reg_top #(
   // Check sub-word write is permitted
   always_comb begin
     wr_err = (reg_we &
-              ((addr_hit[0] & (|(SOC_CTRL_PERMIT[0] & ~reg_be))) |
-               (addr_hit[1] & (|(SOC_CTRL_PERMIT[1] & ~reg_be))) |
-               (addr_hit[2] & (|(SOC_CTRL_PERMIT[2] & ~reg_be))) |
-               (addr_hit[3] & (|(SOC_CTRL_PERMIT[3] & ~reg_be))) |
-               (addr_hit[4] & (|(SOC_CTRL_PERMIT[4] & ~reg_be))) |
-               (addr_hit[5] & (|(SOC_CTRL_PERMIT[5] & ~reg_be))) |
-               (addr_hit[6] & (|(SOC_CTRL_PERMIT[6] & ~reg_be))) |
-               (addr_hit[7] & (|(SOC_CTRL_PERMIT[7] & ~reg_be)))));
+              ((addr_hit[ 0] & (|(SOC_CTRL_PERMIT[ 0] & ~reg_be))) |
+               (addr_hit[ 1] & (|(SOC_CTRL_PERMIT[ 1] & ~reg_be))) |
+               (addr_hit[ 2] & (|(SOC_CTRL_PERMIT[ 2] & ~reg_be))) |
+               (addr_hit[ 3] & (|(SOC_CTRL_PERMIT[ 3] & ~reg_be))) |
+               (addr_hit[ 4] & (|(SOC_CTRL_PERMIT[ 4] & ~reg_be))) |
+               (addr_hit[ 5] & (|(SOC_CTRL_PERMIT[ 5] & ~reg_be))) |
+               (addr_hit[ 6] & (|(SOC_CTRL_PERMIT[ 6] & ~reg_be))) |
+               (addr_hit[ 7] & (|(SOC_CTRL_PERMIT[ 7] & ~reg_be))) |
+               (addr_hit[ 8] & (|(SOC_CTRL_PERMIT[ 8] & ~reg_be))) |
+               (addr_hit[ 9] & (|(SOC_CTRL_PERMIT[ 9] & ~reg_be))) |
+               (addr_hit[10] & (|(SOC_CTRL_PERMIT[10] & ~reg_be)))));
   end
 
   assign exit_valid_we = addr_hit[0] & reg_we & !reg_error;
@@ -394,6 +489,29 @@ module soc_ctrl_reg_top #(
         reg_rdata_next[31:0] = system_frequency_hz_qs;
       end
 
+      addr_hit[8]: begin
+        reg_rdata_next[31:0] = xheep_id_qs;
+      end
+
+      addr_hit[9]: begin
+        reg_rdata_next[0] = xheep_ao_peripheral_config_spi_flash_qs;
+        reg_rdata_next[1] = xheep_ao_peripheral_config_dma_qs;
+        reg_rdata_next[2] = xheep_ao_peripheral_config_pad_control_qs;
+        reg_rdata_next[3] = xheep_ao_peripheral_config_gpio_ao_qs;
+      end
+
+      addr_hit[10]: begin
+        reg_rdata_next[0] = xheep_peripheral_config_rv_plic_qs;
+        reg_rdata_next[1] = xheep_peripheral_config_spi_host_qs;
+        reg_rdata_next[2] = xheep_peripheral_config_gpio_qs;
+        reg_rdata_next[3] = xheep_peripheral_config_i2c_qs;
+        reg_rdata_next[4] = xheep_peripheral_config_rv_timer_qs;
+        reg_rdata_next[5] = xheep_peripheral_config_spi2_qs;
+        reg_rdata_next[6] = xheep_peripheral_config_pdm2pcm_qs;
+        reg_rdata_next[7] = xheep_peripheral_config_i2s_qs;
+        reg_rdata_next[8] = xheep_peripheral_config_uart_qs;
+      end
+
       default: begin
         reg_rdata_next = '1;
       end
@@ -415,7 +533,7 @@ module soc_ctrl_reg_top #(
 endmodule
 
 module soc_ctrl_reg_top_intf #(
-    parameter  int AW = 5,
+    parameter  int AW = 6,
     localparam int DW = 32
 ) (
     input logic clk_i,

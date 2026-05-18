@@ -114,14 +114,14 @@ module ext_bus #(
 
   // X-HEEP slave requests
   generate
-    for (genvar i = 0; i < EXT_XBAR_NMASTER; i++) begin
+    for (genvar i = 0; i < EXT_XBAR_NMASTER; i++) begin : gen_ext_xbar_req
       assign heep_slave_req_o[i] = demux_xbar_req[i][DEMUX_XBAR_INT_SLAVE_IDX];
     end
   endgenerate
 
   // X-HEEP slave responses
   generate
-    for (genvar i = 0; unsigned'(i) < EXT_XBAR_NMASTER; i++) begin
+    for (genvar i = 0; unsigned'(i) < EXT_XBAR_NMASTER; i++) begin : gen_ext_xbar_rsp
       assign demux_xbar_resp[i][DEMUX_XBAR_INT_SLAVE_IDX] = heep_slave_resp_i[i];
     end
   endgenerate
@@ -137,9 +137,10 @@ module ext_bus #(
   // show writes if requested
   always_ff @(posedge clk_i, negedge rst_ni) begin : verbose_writes
     if ($test$plusargs("verbose") != 0 && heep_core_data_req_i.req && heep_core_data_req_i.we)
-      $display(
-          "write addr=0x%08x: data=0x%08x", heep_core_data_req_i.addr, heep_core_data_req_i.wdata
-      );
+      if ($test$plusargs("verbose") != 0 && heep_core_data_req_i.req && heep_core_data_req_i.we)
+        $display(
+            "write addr=0x%08x: data=0x%08x", heep_core_data_req_i.addr, heep_core_data_req_i.wdata
+        );
   end
 `endif
 

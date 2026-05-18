@@ -44,6 +44,13 @@ endif()
 # set the project name
 project(${PROJECT} ASM C CXX)
 
+# environment check
+if(DEFINED ENV{RISCV_XHEEP})
+  set(RISCV_XHEEP "$ENV{RISCV_XHEEP}")
+else()
+  message(WARNING "RISCV_XHEEP not set in the environment. Using the one passed from Makefile: ${RISCV_XHEEP}")
+endif()
+
 # set the required CMake standard
 set(CMAKE_CXX_STANDARD 14)
 
@@ -82,7 +89,7 @@ FOREACH(file_path ${new_list})
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Prune list
 
-  if( add EQUAL 1 ) # If the file path mathced one of the criterion, add it to the list
+  if( add EQUAL 1 ) # If the file path matched one of the criterion, add it to the list
     # Get the path of the obtained directory
     GET_FILENAME_COMPONENT(dir_path ${file_path} PATH)
 
@@ -97,7 +104,7 @@ FOREACH(file_path ${new_list})
 ENDFOREACH()
 
 LIST(REMOVE_DUPLICATES dir_list_str) 
-string(REPLACE ";" "" dir_list_str ${dir_list_str}) #This has been moved here to avoid multiple includes of the same path, see: https://github.com/esl-epfl/x-heep/issues/470
+string(REPLACE ";" "" dir_list_str ${dir_list_str}) #This has been moved here to avoid multiple includes of the same path, see: https://github.com/x-heep/x-heep/issues/470
 LIST(REMOVE_DUPLICATES h_dir_list_)
 
 
@@ -105,8 +112,8 @@ LIST(REMOVE_DUPLICATES h_dir_list_)
 # Add list to the directories to be included
 
 # Get all the folders to include when linking
-SET(INCLUDE_FOLDERS "-I ${RISCV}/${COMPILER_PREFIX}elf/include \
-                     -I ${RISCV}/${COMPILER_PREFIX}elf/include/ \
+SET(INCLUDE_FOLDERS "-I ${RISCV_XHEEP}/${COMPILER_PREFIX}elf/include \
+                     -I ${RISCV_XHEEP}/${COMPILER_PREFIX}elf/include/ \
                      -I ${ROOT_PROJECT} \
                      -I ${SOURCE_PATH} \
 					           ${dir_list_str}")                                      
@@ -138,16 +145,14 @@ FOREACH(file_path IN LISTS new_list)
     endif()
   elseif( (${file_path} MATCHES "${SOURCE_PATH}external/") AND ( NOT  ${file_path} MATCHES "exclude" ) )
     SET(add 1)
-  elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/.*${MAINFILE}\." ) # look for main.*
+  elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}\\." ) # look for main.*
     SET(app_found 1)
   elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/" ) # other sources
     SET(add 1)
   endif()
 
   if( add EQUAL 1 ) # If the file path matched one of the criteria, add it to the list
-    SET(c_dir_list ${c_dir_list} "${file_path}\
-    ")
-    string(REPLACE ";" "" c_dir_list ${c_dir_list})
+    list(APPEND c_dir_list "${file_path}")
   endif()
 
 ENDFOREACH()
@@ -177,14 +182,12 @@ if( app_found EQUAL 0 )
       if(NOT ${file_path} MATCHES ".*/crt/.*")
         SET(add 1)
       endif()
-    elseif( ( ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/" ) AND ( NOT ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/.*${MAINFILE}\." ) AND ( NOT  ${file_path} MATCHES "exclude" ) )
+    elseif( ( ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/" ) AND ( NOT ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/${MAINFILE}\\." ) AND ( NOT  ${file_path} MATCHES "exclude" ) )
       SET(add 1)
     endif()
 
     if( add EQUAL 1 ) # If the file path matched one of the criteria, add it to the list
-      SET(c_dir_list ${c_dir_list} "${file_path}\
-      ")
-      string(REPLACE ";" "" c_dir_list ${c_dir_list})
+      list(APPEND c_dir_list "${file_path}")
     endif()
 
   ENDFOREACH()
@@ -291,27 +294,22 @@ message( "${Magenta}Root project: ${ROOT_PROJECT}${ColourReset}")
 message( "${Magenta}Source path: ${SOURCE_PATH}${ColourReset}")
 message( "${Magenta}LIB_CRT PATH for Cmake: ${LIB_CRT_P}${ColourReset}")
 message( "${Magenta}LINKER File for Cmake: ${LINK_FILE}${ColourReset}")
+message( "${Magenta}LIB_DRIVERS PATH for Cmake: ${LIB_DRIVERS}${ColourReset}")
+message( "${Magenta}Targetting folder: ${INC_FOLDERS}${ColourReset}")
 message( "${Magenta}Target: ${TARGET}${ColourReset}")
 
 endif()
 
+# List of CRT files
+SET(CRT_FILES
+    ${LIB_CRT_P}
+    ${LIB_VCTR_P}
+    ${LIB_CRT_EXT_P}
+)
 
 #######################################################################
 #      SET LINKER PROPERTIES
 #######################################################################
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Set linked files
-
-# Get all the files to include when linking
-SET(LINKED_FILES    "${LIB_CRT_P} \
-                     ${LIB_VCTR_P} \
-                     ${LIB_CRT_EXT_P} \
-                     ${c_dir_list}") 
-
-if (${VERBOSE} MATCHES "true")
- message( "${Magenta}Linked files: ${LINKED_FILES}${ColourReset}")
-endif()
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Free-RTOS configurations
@@ -347,19 +345,22 @@ endif()
 
 # specify the C standard
 if(NOT ${PROJECT} MATCHES "coremark")
-  set(COMPILER_LINKER_FLAGS "\
+  set(BASE_COMPILER_FLAGS "\
     -march=${CMAKE_SYSTEM_PROCESSOR} \
-    -w -O2 -g  -nostdlib  \
+    -w -O2 -g \
+    -nostartfiles \
     -ffunction-sections \
     -DHOST_BUILD \
     -D${CRT_TYPE} \
     -D${CRTO} \
     -DportasmHANDLE_INTERRUPT=vSystemIrqHandler\
+    ${COMPILER_FLAGS}\
   ")
 else()
-  set(COMPILER_LINKER_FLAGS "\
+  set(BASE_COMPILER_FLAGS "\
     -march=${CMAKE_SYSTEM_PROCESSOR} \
-    -w -O3 -g  -nostdlib -falign-functions=16 -funroll-all-loops -falign-jumps=4 -finline-functions -Wall -static -pedantic -DPERFORMANCE_RUN=1 -DITERATIONS=1 -DHAS_STDIO=1 -DHAS_PRINTF=1 \
+    -w -O3 -g -falign-functions=16 -funroll-all-loops -falign-jumps=4 -finline-functions -Wall -static -pedantic -DPERFORMANCE_RUN=1 -DITERATIONS=1 -DHAS_STDIO=1 -DHAS_PRINTF=1 \
+    -nostartfiles \
     -ffunction-sections \
     -DHOST_BUILD \
     -D${CRT_TYPE} \
@@ -367,19 +368,24 @@ else()
     -DportasmHANDLE_INTERRUPT=vSystemIrqHandler\
   ")
 endif()
-set(CMAKE_C_FLAGS ${COMPILER_LINKER_FLAGS})
-set(CMAKE_CXX_FLAGS ${COMPILER_LINKER_FLAGS})
+set(CMAKE_C_FLAGS ${BASE_COMPILER_FLAGS})
+set(CMAKE_CXX_FLAGS ${BASE_COMPILER_FLAGS})
+set(CMAKE_ASM_FLAGS ${BASE_COMPILER_FLAGS})
+
+message( "${Yellow}Compiler flags: ${BASE_COMPILER_FLAGS}${ColourReset}")
 
 if (${COMPILER} MATCHES "clang")
-     set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --target=riscv32 \
-                                          --gcc-toolchain=${RISCV} \
-                                          --sysroot=${RISCV}/${COMPILER_PREFIX}elf \
-                                          -static \
-                                          -mcmodel=medany \
-                                          -fvisibility=hidden \
-                                          -nostartfiles \
-                                          -Wall \
-                                          -Wno-unused-command-line-argument" )
+     set( CLANG_EXTRA_FLAGS "--target=riscv32 \
+                             --gcc-toolchain=${RISCV_XHEEP} \
+                             --sysroot=${RISCV_XHEEP}/${COMPILER_PREFIX}elf \
+                             -static \
+                             -mcmodel=medany \
+                             -fvisibility=hidden \
+                             -Wall \
+                             -Wno-unused-command-line-argument")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CLANG_EXTRA_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CLANG_EXTRA_FLAGS}")
+  set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${CLANG_EXTRA_FLAGS}")
 endif()
 
 # In case of wanting to create a library with those subdirectories
@@ -390,21 +396,23 @@ endif()
 #######################################################################
 #      SET TARGETS
 #######################################################################
-if (${COMPILER} MATCHES "gcc")
+if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
   set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
   if(NOT EXISTS ${SOURCES})
     # If main.c does not exist, set the source file to main.cpp
     set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.cpp)
     message("${Red}cpp SOURCES set")
   endif()
-elseif(${COMPILER} MATCHES "clang")
-  set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
 elseif(${COMPILER} MATCHES "g\\+\\+.*$")
   set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.cpp)
 endif()
 
 # add the executable
-add_executable(${MAINFILE}.elf ${SOURCES})
+add_executable(${MAINFILE}.elf 
+  ${SOURCES}
+  ${CRT_FILES}
+  ${c_dir_list}
+)
 
 # add include directories to compilation
 target_include_directories(${MAINFILE}.elf PUBLIC ${h_dir_list_})
@@ -424,16 +432,36 @@ message( "${Magenta}Linker file: ${LINKER_SCRIPT}${ColourReset}")
 # Setting-up the properties, elf is
 set_target_properties(${MAINFILE}.elf PROPERTIES LINK_DEPENDS "${LINKER_SCRIPT}")
 
-# Linker control
-SET(CMAKE_EXE_LINKER_FLAGS  "-T ${LINKER_SCRIPT}  \
-                            ${INCLUDE_FOLDERS} \
-                             -static ${LINKED_FILES} \
-                             -Wl,-Map=${MAINFILE}.map \
-                             -L ${RISCV}/${COMPILER_PREFIX}elf/lib \
-                             -lc -lm -lgcc -flto \
-                             -fpermissive -fno-rtti -fno-exceptions -fno-threadsafe-statics \
-                            -ffunction-sections -fdata-sections -specs=nano.specs")
-message( "${Magenta}Lib Folder RISCV-GCC: ${RISCV}/${COMPILER_PREFIX}elf/lib${ColourReset}")
+# Linker control (support both GCC and Clang)
+if (${COMPILER} MATCHES "clang")
+  # Linker flags for Clang
+  message(STATUS "${Magenta}Using Clang/lld specific linker flags${ColourReset}")
+  SET(CMAKE_EXE_LINKER_FLAGS  "-T ${LINKER_SCRIPT}  \
+                              -static \
+                              -Wl,-Map=${MAINFILE}.map \
+                              -Wl,--gc-sections \
+                              -Wl,--allow-multiple-definition \
+                              -L ${RISCV_XHEEP}/${COMPILER_PREFIX}elf/lib \
+                              -lc -lm -lgcc -flto \
+                              -fpermissive -fno-rtti -fno-exceptions -fno-threadsafe-statics \
+                              -ffunction-sections -fdata-sections \
+                              --target=riscv32 \
+                              -fuse-ld=lld")
+else()
+  # Linker flags for GCC
+  message (STATUS "${Magenta}Using GCC specific linker flags${ColourReset}")
+  # Linker control
+  SET(CMAKE_EXE_LINKER_FLAGS  "-T ${LINKER_SCRIPT}  \
+                              -static \
+                              -Wl,-Map=${MAINFILE}.map \
+                              -Wl,--gc-sections \
+                              -L ${RISCV_XHEEP}/${COMPILER_PREFIX}elf/lib \
+                              -lc -lm -lgcc -flto \
+                              -fpermissive -fno-rtti -fno-exceptions -fno-threadsafe-statics \
+                              -ffunction-sections -fdata-sections -specs=nano.specs")
+endif()
+message( "${Green}RISCV_XHEEP env variable: ${RISCV_XHEEP}")
+message( "${Magenta}Lib Folder RISCV-GCC: ${RISCV_XHEEP}/${COMPILER_PREFIX}elf/lib${ColourReset}")
 
 if (${VERBOSE} MATCHES "true")
  SET(CMAKE_VERBOSE_MAKEFILE ON)
@@ -453,14 +481,16 @@ endif()
 
 # Specify that we want to link with GCC even if we are compiling with clang
 if (${COMPILER} MATCHES "clang")
+  # Call clang here as the flags below are actually meant for a compiler driver, not a linker.
+  set(CLANG_LINKER_EXE "ld.lld")
 	if( ${PROJECT} MATCHES "freertos" )
-		set( CMAKE_C_LINK_EXECUTABLE "${CMAKE_LINKER} ${COMPILER_LINKER_FLAGS} ${CMAKE_EXE_LINKER_FLAGS} \
+		set( CMAKE_C_LINK_EXECUTABLE "${CLANG_LINKER_EXE} ${CMAKE_EXE_LINKER_FLAGS} \
                                 ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${MAINFILE}.c.obj \
                                 -o ${MAINFILE}.elf \
 								_deps/freertos_kernel-build/libfreertos_kernel.a \ _deps/freertos_kernel-build/portable/libfreertos_kernel_port.a \ _deps/freertos_kernel-build/libfreertos_kernel.a \ _deps/freertos_kernel-build/portable/libfreertos_kernel_port.a \
 								")
 	else()
-    set( CMAKE_C_LINK_EXECUTABLE "${CMAKE_LINKER} ${COMPILER_LINKER_FLAGS} ${CMAKE_EXE_LINKER_FLAGS} \
+    set( CMAKE_C_LINK_EXECUTABLE "${CLANG_LINKER_EXE} ${CMAKE_EXE_LINKER_FLAGS} \
                                 ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${MAINFILE}.c.obj \
                                 -o ${MAINFILE}.elf")
     endif()
@@ -473,22 +503,25 @@ endif()
 # Post processing command to create a disassembly file
 add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
         COMMAND ${CMAKE_OBJDUMP} -S  ${MAINFILE}.elf > ${MAINFILE}.S
-        COMMENT "Invoking: Disassemble")
+        COMMENT "Invoking: Disassemble (${CMAKE_OBJDUMP})")
 
 # Post processing command to create a hex file
 if((${LINKER} STREQUAL "flash_load") OR (${LINKER} STREQUAL "flash_exec"))
     add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
-            COMMAND ${CMAKE_OBJCOPY} -O verilog --adjust-vma=-0x40000000 ${MAINFILE}.elf  ${MAINFILE}.hex
+            COMMAND ${CMAKE_OBJCOPY} -O verilog --adjust-vma=-0x40000000 ${MAINFILE}.elf ${MAINFILE}.hex
             COMMENT "Invoking: Hexdump")
 else()
     add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
-            COMMAND ${CMAKE_OBJCOPY} -O verilog  ${MAINFILE}.elf  ${MAINFILE}.hex
+            COMMAND ${CMAKE_OBJCOPY} -O verilog  ${MAINFILE}.elf ${MAINFILE}.hex
             COMMENT "Invoking: Hexdump")
+    add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
+            COMMAND ${CMAKE_OBJCOPY} --srec-forceS3 --srec-len 1 -O srec ${MAINFILE}.elf ${MAINFILE}.hex.srec
+            COMMENT "Invoking: SREC Hexdump")
 endif()
 
 add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary  ${MAINFILE}.elf  ${MAINFILE}.bin
-        COMMENT "Invoking: Hexdump")
+        COMMENT "Invoking: Binary dump")
 
 # Pre-processing command to create disassembly for each source file
 if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
@@ -497,14 +530,14 @@ if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
     add_custom_command(TARGET ${MAINFILE}.elf
                        PRE_LINK
                        COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
-                       COMMENT "Invoking: GCC C Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")   
+                       COMMENT "Invoking: C Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")   
    endforeach()
   else() #main.cpp targets
   foreach (SRC_MODULE ${MAINFILE} )
     add_custom_command(TARGET ${MAINFILE}.elf
                        PRE_LINK
                       COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
-                      COMMENT "Invoking:  GCC CPP Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
+                      COMMENT "Invoking: CPP Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
     endforeach()
   endif()
 elseif(${COMPILER} MATCHES "g\\+\\+.*$")
@@ -521,6 +554,11 @@ endif()
 #add_custom_target(gdb DEPENDS ${MAINFILE}.elf)
 #add_custom_command(TARGET gdb
 #    COMMAND ${CMAKE_C_GDB} ${MAINFILE}.elf -x gdbInit &)
+
+# Post-processing to have access to linker script in build folder
+add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${LINKER_SCRIPT} ${MAINFILE}.ld
+        COMMENT "Invoking: Linker script copy")
 
 SET(DCMAKE_EXPORT_COMPILE_COMMANDS ON)
 

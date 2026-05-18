@@ -2,6 +2,8 @@
 // Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
+`include "heepsilon_clock_config.svh"
+
 module tb_top #(
     parameter COREV_PULP                  = 0,
     parameter FPU                         = 0,
@@ -14,10 +16,10 @@ module tb_top #(
   // comment to record execution trace
   //`define TRACE_EXECUTION
 
-  const time CLK_PHASE_HI = 5ns;
-  const time CLK_PHASE_LO = 5ns;
-  localparam CLK_FREQUENCY_KHz = 100_000;
-  const time CLK_PERIOD = CLK_PHASE_HI + CLK_PHASE_LO;
+  localparam int unsigned CLK_FREQUENCY_KHz = `HEEPSILON_CPU_CLK_KHZ;
+  localparam time CLK_PERIOD = 1s / (CLK_FREQUENCY_KHz * 1000);
+  localparam time CLK_PHASE_HI = CLK_PERIOD / 2;
+  localparam time CLK_PHASE_LO = CLK_PERIOD / 2;
 
   const time STIM_APPLICATION_DEL = CLK_PERIOD * 0.1;
   const time RESP_ACQUISITION_DEL = CLK_PERIOD * 0.9;
@@ -113,6 +115,8 @@ module tb_top #(
         execute_from_flash = 1;
       end
     end
+
+    testharness_i.load_flash_hex(firmware);
 
     wait (rst_n == 1'b1);
 

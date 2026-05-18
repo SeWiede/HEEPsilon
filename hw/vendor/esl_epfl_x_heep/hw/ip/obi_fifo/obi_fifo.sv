@@ -87,6 +87,13 @@ module obi_fifo
     endcase
   end
 
+  // Use a dedicated signal for rvalid status to avoid cross-driver issues
+  // between always_comb (gnt) and assign (rvalid) on the same struct.
+  // Reading producer_resp_o.rvalid inside always_comb when it is driven by
+  // an assign causes Verilator evaluation-order mismatches.
+  logic producer_rvalid;
+  assign producer_rvalid = !fifo_resp_empty;
+
   //block producer outstanding transactions, the FIFO in theory can support more request at a time
   //but the bus won't dispatch the results depending on ID issues, so OBI slaves that have longer gnt/rvalid latency cannot support
   //back to back requests
@@ -106,7 +113,7 @@ module obi_fifo
       PRODUCER_WAIT_FOR_VALID: begin
         fifo_req_push       = 1'b0;
         producer_resp_o.gnt = 1'b0;
-        if (producer_resp_o.rvalid) begin
+        if (producer_rvalid) begin
           fifo_req_push = producer_req_i.req && !fifo_req_full;
           producer_resp_o.gnt = !fifo_req_full;
           if (producer_req_i.req && producer_resp_o.gnt) begin

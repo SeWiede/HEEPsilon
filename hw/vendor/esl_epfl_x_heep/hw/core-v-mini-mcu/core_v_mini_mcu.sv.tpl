@@ -2,9 +2,15 @@
 // Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
+<%
+  dma = xheep.get_base_peripheral_domain().get_dma()
+  memory_ss = xheep.memory_ss()
+%>
+
 module core_v_mini_mcu
   import obi_pkg::*;
   import reg_pkg::*;
+  import fifo_pkg::*;
 #(
     parameter COREV_PULP = 0,
     parameter FPU = 0,
@@ -14,7 +20,7 @@ module core_v_mini_mcu
     parameter AO_SPC_NUM = 0,
     parameter EXT_HARTS = 0,
     //do not touch these parameters
-    parameter AO_SPC_NUM_RND = AO_SPC_NUM == 0 ? 1 : AO_SPC_NUM,
+    parameter AO_SPC_NUM_RND = AO_SPC_NUM == 0 ? 0 : AO_SPC_NUM - 1,
     parameter EXT_XBAR_NMASTER_RND = EXT_XBAR_NMASTER == 0 ? 1 : EXT_XBAR_NMASTER,
     parameter EXT_DOMAINS_RND = core_v_mini_mcu_pkg::EXTERNAL_DOMAINS == 0 ? 1 : core_v_mini_mcu_pkg::EXTERNAL_DOMAINS,
     parameter NEXT_INT_RND = core_v_mini_mcu_pkg::NEXT_INT == 0 ? 1 : core_v_mini_mcu_pkg::NEXT_INT,
@@ -23,9 +29,13 @@ module core_v_mini_mcu
 
     input logic rst_ni,
 
-% for pad in pad_list:
+% for pad in xheep.get_padring().pad_list:
 ${pad.core_v_mini_mcu_interface}
 % endfor
+
+    // IDs
+    input logic [31:0] hart_id_i,
+    input logic [31:0] xheep_instance_id_i,
 
     // eXtension interface
     if_xif.cpu_compressed xif_compressed_if,
@@ -41,8 +51,8 @@ ${pad.core_v_mini_mcu_interface}
     input  obi_req_t  [EXT_XBAR_NMASTER_RND-1:0] ext_xbar_master_req_i,
     output obi_resp_t [EXT_XBAR_NMASTER_RND-1:0] ext_xbar_master_resp_o,
 
-    input reg_req_t  [AO_SPC_NUM_RND-1:0] ext_ao_peripheral_slave_req_i,
-    output reg_rsp_t [AO_SPC_NUM_RND-1:0] ext_ao_peripheral_slave_resp_o,
+    input reg_req_t  [AO_SPC_NUM_RND:0] ext_ao_peripheral_slave_req_i,
+    output reg_rsp_t [AO_SPC_NUM_RND:0] ext_ao_peripheral_slave_resp_o,
 
     // External slave ports
     output obi_req_t  ext_core_instr_req_o,
@@ -58,7 +68,11 @@ ${pad.core_v_mini_mcu_interface}
     output obi_req_t  [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] ext_dma_addr_req_o,
     input  obi_resp_t [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] ext_dma_addr_resp_i,
 
+    output fifo_req_t [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_req_o,
+    input fifo_resp_t [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_resp_i,
+
     input logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_stop_i,
+    input logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_done_i,
 
     output reg_req_t ext_peripheral_slave_req_o,
     input  reg_rsp_t ext_peripheral_slave_resp_i,
@@ -66,7 +80,10 @@ ${pad.core_v_mini_mcu_interface}
     output logic  [EXT_HARTS_RND-1:0] ext_debug_req_o,
     output logic  ext_debug_reset_no,
 
+    // PLIC external interrupts
     input logic [NEXT_INT_RND-1:0] intr_vector_ext_i,
+    // FIC external interrupt
+    input logic intr_ext_peripheral_i,
 
     //power manager exposed to top level
     //signals are unrolled to easy EDA tools
@@ -109,6 +126,10 @@ ${pad.core_v_mini_mcu_interface}
   end
 `endif
 
+<%
+  obi_msb = dma.get_num_master_ports() - 1
+%>
+
   // masters signals
   obi_req_t core_instr_req;
   obi_resp_t core_instr_resp;
@@ -116,12 +137,12 @@ ${pad.core_v_mini_mcu_interface}
   obi_resp_t core_data_resp;
   obi_req_t debug_master_req;
   obi_resp_t debug_master_resp;
-  obi_req_t [${int(num_dma_master_ports)-1}:0]dma_read_req;
-  obi_resp_t [${int(num_dma_master_ports)-1}:0]dma_read_resp;
-  obi_req_t [${int(num_dma_master_ports)-1}:0]dma_write_req;
-  obi_resp_t [${int(num_dma_master_ports)-1}:0]dma_write_resp;
-  obi_req_t [${int(num_dma_master_ports)-1}:0]dma_addr_req;
-  obi_resp_t [${int(num_dma_master_ports)-1}:0]dma_addr_resp;
+  obi_req_t [${obi_msb}:0]dma_read_req;
+  obi_resp_t [${obi_msb}:0]dma_read_resp;
+  obi_req_t [${obi_msb}:0]dma_write_req;
+  obi_resp_t [${obi_msb}:0]dma_write_resp;
+  obi_req_t [${obi_msb}:0]dma_addr_req;
+  obi_resp_t [${obi_msb}:0]dma_addr_resp;
 
   // ram signals
   obi_req_t [core_v_mini_mcu_pkg::NUM_BANKS-1:0] ram_slave_req;
@@ -149,7 +170,7 @@ ${pad.core_v_mini_mcu_interface}
   logic [4:0] irq_id_out;
   logic irq_software;
   logic irq_external;
-  logic [14:0] irq_fast;
+  logic [15:0] irq_fast;
 
   // Memory Map SPI Region
   obi_req_t flash_mem_slave_req;
@@ -160,7 +181,7 @@ ${pad.core_v_mini_mcu_interface}
 
   // interrupt array
   logic [31:0] intr;
-  logic [14:0] fast_intr;
+  logic [15:0] fast_intr;
 
   //Power manager signals
   power_manager_out_t cpu_subsystem_pwr_ctrl_out;
@@ -201,7 +222,7 @@ ${pad.core_v_mini_mcu_interface}
   assign peripheral_subsystem_rst_n           = peripheral_subsystem_pwr_ctrl_out.rst_n;
   assign peripheral_subsystem_clkgate_en_n    = peripheral_subsystem_pwr_ctrl_out.clkgate_en_n;
 
-% for bank in xheep.iter_ram_banks():
+% for bank in memory_ss.iter_ram_banks():
   assign memory_subsystem_banks_powergate_switch_n[${bank.name()}] = memory_subsystem_pwr_ctrl_out[${bank.name()}].pwrgate_en_n;
   assign memory_subsystem_pwr_ctrl_in[${bank.name()}].pwrgate_ack_n = memory_subsystem_banks_powergate_switch_ack_n[${bank.name()}];
   //isogate exposed outside for UPF sim flow and switch cells
@@ -210,7 +231,7 @@ ${pad.core_v_mini_mcu_interface}
   assign memory_subsystem_clkgate_en_n[${bank.name()}] = memory_subsystem_pwr_ctrl_out[${bank.name()}].clkgate_en_n;
 % endfor
 
-  for (genvar i = 0; i < EXT_DOMAINS_RND; i = i + 1) begin
+  for (genvar i = 0; i < EXT_DOMAINS_RND; i = i + 1) begin : gen_external_subsystem_pwr_gating
     assign external_subsystem_powergate_switch_no[i]        = external_subsystem_pwr_ctrl_out[i].pwrgate_en_n;
     assign external_subsystem_powergate_iso_no[i] = external_subsystem_pwr_ctrl_out[i].isogate_en_n;
     assign external_subsystem_rst_no[i] = external_subsystem_pwr_ctrl_out[i].rst_n;
@@ -237,25 +258,16 @@ ${pad.core_v_mini_mcu_interface}
   logic [7:0] gpio_ao_oe;
   logic [7:0] gpio_ao_intr;
 
-  // UART PLIC interrupts
-  logic uart_intr_tx_watermark;
-  logic uart_intr_rx_watermark;
-  logic uart_intr_tx_empty;
-  logic uart_intr_rx_overflow;
-  logic uart_intr_rx_frame_err;
-  logic uart_intr_rx_break_err;
-  logic uart_intr_rx_timeout;
-  logic uart_intr_rx_parity_err;
-
   // I2s
   logic i2s_rx_valid;
 
   assign intr = {
-    1'b0, irq_fast, 4'b0, irq_external, 3'b0, rv_timer_intr[0], 3'b0, irq_software, 3'b0
+    irq_fast, 4'b0, irq_external, 3'b0, rv_timer_intr[0], 3'b0, irq_software, 3'b0
   };
 
   assign fast_intr = {
-    1'b0,
+    intr_ext_peripheral_i,
+    dma_window_intr,
     gpio_ao_intr,
     spi_flash_intr,
     spi_intr,
@@ -277,6 +289,7 @@ ${pad.core_v_mini_mcu_interface}
       // Clock and Reset
       .clk_i,
       .rst_ni(cpu_subsystem_rst_n && debug_reset_n),
+      .hart_id_i,
       .core_instr_req_o(core_instr_req),
       .core_instr_resp_i(core_instr_resp),
       .core_data_req_o(core_data_req),
@@ -296,7 +309,8 @@ ${pad.core_v_mini_mcu_interface}
 
   debug_subsystem #(
       .NRHARTS    (NRHARTS),
-      .JTAG_IDCODE(JTAG_IDCODE)
+      .JTAG_IDCODE(JTAG_IDCODE),
+      .SPI_SLAVE(${has_spi_slave})
   ) debug_subsystem_i (
       .clk_i,
       .rst_ni,
@@ -305,6 +319,11 @@ ${pad.core_v_mini_mcu_interface}
       .jtag_trst_ni,
       .jtag_tdi_i,
       .jtag_tdo_o,
+      .spi_slave_sck_i(spi_slave_sck_i),
+      .spi_slave_cs_i(spi_slave_cs_i),
+      .spi_slave_miso_o(spi_slave_miso_o),
+      .spi_slave_miso_oe_o(spi_slave_miso_oe_o),
+      .spi_slave_mosi_i(spi_slave_mosi_i),
       .debug_core_req_o(debug_req),
       .debug_ndmreset_no(debug_reset_n),
       .debug_slave_req_i(debug_slave_req),
@@ -379,6 +398,7 @@ ${pad.core_v_mini_mcu_interface}
       .slave_resp_o(ao_peripheral_slave_resp),
       .spc2ao_req_i(ext_ao_peripheral_slave_req_i),
       .ao2spc_resp_o(ext_ao_peripheral_slave_resp_o),
+      .xheep_instance_id_i,
       .boot_select_i,
       .execute_from_flash_i,
       .exit_valid_o,
@@ -413,6 +433,8 @@ ${pad.core_v_mini_mcu_interface}
       .dma_addr_resp_i(dma_addr_resp),
       .dma_done_intr_o(dma_done_intr),
       .dma_window_intr_o(dma_window_intr),
+      .hw_fifo_req_o,
+      .hw_fifo_resp_i,
       .spi_flash_intr_event_o(spi_flash_intr),
       .pad_req_o,
       .pad_resp_i,
@@ -422,16 +444,6 @@ ${pad.core_v_mini_mcu_interface}
       .cio_gpio_o(gpio_ao_out),
       .cio_gpio_en_o(gpio_ao_oe),
       .intr_gpio_o(gpio_ao_intr),
-      .uart_rx_i,
-      .uart_tx_o,
-      .uart_intr_tx_watermark_o(uart_intr_tx_watermark),
-      .uart_intr_rx_watermark_o(uart_intr_rx_watermark),
-      .uart_intr_tx_empty_o(uart_intr_tx_empty),
-      .uart_intr_rx_overflow_o(uart_intr_rx_overflow),
-      .uart_intr_rx_frame_err_o(uart_intr_rx_frame_err),
-      .uart_intr_rx_break_err_o(uart_intr_rx_break_err),
-      .uart_intr_rx_timeout_o(uart_intr_rx_timeout),
-      .uart_intr_rx_parity_err_o(uart_intr_rx_parity_err),
       .spi_rx_valid_i(spi_rx_valid),
       .spi_tx_ready_i(spi_tx_ready),
       .i2s_rx_valid_i(i2s_rx_valid),
@@ -440,6 +452,7 @@ ${pad.core_v_mini_mcu_interface}
       .ext_dma_slot_tx_i,
       .ext_dma_slot_rx_i,
       .ext_dma_stop_i,
+      .hw_fifo_done_i,
       .dma_done_o
   );
 
@@ -452,15 +465,6 @@ ${pad.core_v_mini_mcu_interface}
       .intr_vector_ext_i,
       .irq_plic_o(irq_external),
       .msip_o(irq_software),
-      .uart_intr_tx_watermark_i(uart_intr_tx_watermark),
-      .uart_intr_rx_watermark_i(uart_intr_rx_watermark),
-      .uart_intr_tx_empty_i(uart_intr_tx_empty),
-      .uart_intr_rx_overflow_i(uart_intr_rx_overflow),
-      .uart_intr_rx_frame_err_i(uart_intr_rx_frame_err),
-      .uart_intr_rx_break_err_i(uart_intr_rx_break_err),
-      .uart_intr_rx_timeout_i(uart_intr_rx_timeout),
-      .uart_intr_rx_parity_err_i(uart_intr_rx_parity_err),
-      .dma_window_intr_i(dma_window_intr),
       .cio_gpio_i(gpio_in),
       .cio_gpio_o(gpio_out),
       .cio_gpio_en_o(gpio_oe),
@@ -501,14 +505,16 @@ ${pad.core_v_mini_mcu_interface}
       .i2s_sd_o(i2s_sd_o),
       .i2s_sd_oe_o(i2s_sd_oe_o),
       .i2s_sd_i(i2s_sd_i),
-      .i2s_rx_valid_o(i2s_rx_valid)
+      .i2s_rx_valid_o(i2s_rx_valid),
+      .uart_rx_i,
+      .uart_tx_o
   );
 
   // Debug_req assign
-  if (NRHARTS == 1) begin
+  if (NRHARTS == 1) begin : gen_single_hart_debug
     assign debug_core_req = debug_req;
     assign ext_debug_req_o  = 1'b0;
-  end else begin
+  end else begin : gen_multi_hart_debug
     always @(*) begin
       for (int i = 0; i < NRHARTS; i++) begin
         if (i == 0) debug_core_req = debug_req[i];

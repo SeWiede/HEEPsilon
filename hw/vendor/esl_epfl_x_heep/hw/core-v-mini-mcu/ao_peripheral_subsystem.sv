@@ -2,14 +2,18 @@
 // Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
+
+
+
 module ao_peripheral_subsystem
   import obi_pkg::*;
   import reg_pkg::*;
   import power_manager_pkg::*;
+  import fifo_pkg::*;
 #(
     parameter AO_SPC_NUM = 0,
     //do not touch these parameters
-    parameter AO_SPC_NUM_RND = AO_SPC_NUM == 0 ? 1 : AO_SPC_NUM,
+    parameter AO_SPC_NUM_RND = AO_SPC_NUM == 0 ? 0 : AO_SPC_NUM - 1,
     parameter EXT_DOMAINS_RND = core_v_mini_mcu_pkg::EXTERNAL_DOMAINS == 0 ? 1 : core_v_mini_mcu_pkg::EXTERNAL_DOMAINS,
     parameter NEXT_INT_RND = core_v_mini_mcu_pkg::NEXT_INT == 0 ? 1 : core_v_mini_mcu_pkg::NEXT_INT
 ) (
@@ -19,10 +23,11 @@ module ao_peripheral_subsystem
     input  reg_req_t slave_req_i,
     output reg_rsp_t slave_resp_o,
 
-    input  reg_req_t [AO_SPC_NUM_RND-1:0] spc2ao_req_i,
-    output reg_rsp_t [AO_SPC_NUM_RND-1:0] ao2spc_resp_o,
+    input  reg_req_t [AO_SPC_NUM_RND:0] spc2ao_req_i,
+    output reg_rsp_t [AO_SPC_NUM_RND:0] ao2spc_resp_o,
 
     // SOC CTRL
+    input  logic [31:0] xheep_instance_id_i,
     input  logic        boot_select_i,
     input  logic        execute_from_flash_i,
     output logic        exit_valid_o,
@@ -76,31 +81,22 @@ module ao_peripheral_subsystem
     output logic                                                      dma_done_intr_o,
     output logic                                                      dma_window_intr_o,
 
+    output fifo_req_t  [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_req_o,
+    input  fifo_resp_t [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_resp_i,
+
     // External PADs
     output reg_req_t pad_req_o,
     input  reg_rsp_t pad_resp_i,
 
     // FAST INTR CTRL
-    input  logic [14:0] fast_intr_i,
-    output logic [14:0] fast_intr_o,
+    input  logic [15:0] fast_intr_i,
+    output logic [15:0] fast_intr_o,
 
     // GPIO
     input  logic [7:0] cio_gpio_i,
     output logic [7:0] cio_gpio_o,
     output logic [7:0] cio_gpio_en_o,
     output logic [7:0] intr_gpio_o,
-
-    // UART
-    input  logic uart_rx_i,
-    output logic uart_tx_o,
-    output logic uart_intr_tx_watermark_o,
-    output logic uart_intr_rx_watermark_o,
-    output logic uart_intr_tx_empty_o,
-    output logic uart_intr_rx_overflow_o,
-    output logic uart_intr_rx_frame_err_o,
-    output logic uart_intr_rx_break_err_o,
-    output logic uart_intr_rx_timeout_o,
-    output logic uart_intr_rx_parity_err_o,
 
     // I2s
     input logic i2s_rx_valid_i,
@@ -113,6 +109,7 @@ module ao_peripheral_subsystem
     input  logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_slot_tx_i,
     input  logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_slot_rx_i,
     input  logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] ext_dma_stop_i,
+    input  logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_done_i,
     output logic [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] dma_done_o
 
 );
@@ -138,9 +135,6 @@ module ao_peripheral_subsystem
 
   tlul_pkg::tl_h2d_t rv_timer_tl_h2d;
   tlul_pkg::tl_d2h_t rv_timer_tl_d2h;
-
-  tlul_pkg::tl_h2d_t uart_tl_h2d;
-  tlul_pkg::tl_d2h_t uart_tl_d2h;
 
   /* SPI memory signals */
   logic use_spimemio;
@@ -169,6 +163,8 @@ module ao_peripheral_subsystem
   /* Peripheral demuxed register interface */
   assign ext_peripheral_slave_req_o = ao_peripheral_slv_req[core_v_mini_mcu_pkg::EXT_PERIPHERAL_IDX];
   assign ao_peripheral_slv_rsp[core_v_mini_mcu_pkg::EXT_PERIPHERAL_IDX] = ext_peripheral_slave_resp_i;
+
+
   assign pad_req_o = ao_peripheral_slv_req[core_v_mini_mcu_pkg::PAD_CONTROL_IDX];
   assign ao_peripheral_slv_rsp[core_v_mini_mcu_pkg::PAD_CONTROL_IDX] = pad_resp_i;
 
@@ -231,21 +227,21 @@ module ao_peripheral_subsystem
 
   /* SPC crossbar & FIFOs */
   generate
-    if (AO_SPC_NUM_RND > 0) begin
+    if (AO_SPC_NUM > 0) begin : gen_aopb
       /* Assign the bus port to the first input port of the AOPB */
-      reg_req_t [AO_SPC_NUM_RND:0] packet_req;
-      reg_rsp_t [AO_SPC_NUM_RND:0] packet_rsp;
+      reg_req_t [AO_SPC_NUM:0] packet_req;
+      reg_rsp_t [AO_SPC_NUM:0] packet_rsp;
 
       assign packet_req[0]  = peripheral_req;
       assign peripheral_rsp = packet_rsp[0];
 
-      for (genvar i = 0; i < AO_SPC_NUM_RND; i++) begin : gen_spc
+      for (genvar i = 0; i < AO_SPC_NUM; i++) begin : gen_spc
         assign packet_req[i+1]  = spc2ao_req_i[i];
         assign ao2spc_resp_o[i] = packet_rsp[i+1];
       end
 
       reg_mux #(
-          .NoPorts(AO_SPC_NUM_RND + 1),
+          .NoPorts(AO_SPC_NUM + 1),
           .req_t  (reg_pkg::reg_req_t),
           .rsp_t  (reg_pkg::reg_rsp_t),
           .AW     (32),
@@ -259,7 +255,8 @@ module ao_peripheral_subsystem
           .out_rsp_i(regdemux2perconv_resp)
       );
 
-    end else begin
+    end else begin : gen_no_aopb
+      assign ao2spc_resp_o = '0;
       assign perconv2regdemux_req = peripheral_req;
       assign peripheral_rsp = regdemux2perconv_resp;
     end
@@ -306,6 +303,7 @@ module ao_peripheral_subsystem
       .reg_rsp_o(ao_peripheral_slv_rsp[core_v_mini_mcu_pkg::SOC_CTRL_IDX]),
       .boot_select_i,
       .execute_from_flash_i,
+      .xheep_instance_id_i,
       .use_spimemio_o(use_spimemio),
       .exit_valid_o,
       .exit_value_o
@@ -390,6 +388,7 @@ module ao_peripheral_subsystem
       .intr_timer_expired_1_0_o(rv_timer_1_intr_o)
   );
 
+
   dma_subsystem #(
       .reg_req_t(reg_pkg::reg_req_t),
       .reg_rsp_t(reg_pkg::reg_rsp_t),
@@ -409,13 +408,17 @@ module ao_peripheral_subsystem
       .dma_write_resp_i,
       .dma_addr_req_o,
       .dma_addr_resp_i,
+      .hw_fifo_req_o,
+      .hw_fifo_resp_i,
       .global_trigger_slot_i(dma_global_trigger_slots),
       .ext_trigger_slot_i(dma_ext_trigger_slots),
       .ext_dma_stop_i(ext_dma_stop_i),
+      .hw_fifo_done_i,
       .dma_done_intr_o(dma_done_intr_o),
       .dma_window_intr_o(dma_window_intr_o),
       .dma_done_o(dma_done_o)
   );
+
 
   fast_intr_ctrl #(
       .reg_req_t(reg_pkg::reg_req_t),
@@ -444,42 +447,6 @@ module ao_peripheral_subsystem
       .gpio_in_sync_o(),
       .pin_level_interrupts_o({intr_gpio_unused, intr_gpio_o}),
       .global_interrupt_o()
-  );
-
-  reg_to_tlul #(
-      .req_t(reg_pkg::reg_req_t),
-      .rsp_t(reg_pkg::reg_rsp_t),
-      .tl_h2d_t(tlul_pkg::tl_h2d_t),
-      .tl_d2h_t(tlul_pkg::tl_d2h_t),
-      .tl_a_user_t(tlul_pkg::tl_a_user_t),
-      .tl_a_op_e(tlul_pkg::tl_a_op_e),
-      .TL_A_USER_DEFAULT(tlul_pkg::TL_A_USER_DEFAULT),
-      .PutFullData(tlul_pkg::PutFullData),
-      .Get(tlul_pkg::Get)
-  ) reg_to_tlul_uart_i (
-      .tl_o(uart_tl_h2d),
-      .tl_i(uart_tl_d2h),
-      .reg_req_i(ao_peripheral_slv_req[core_v_mini_mcu_pkg::UART_IDX]),
-      .reg_rsp_o(ao_peripheral_slv_rsp[core_v_mini_mcu_pkg::UART_IDX])
-  );
-
-  /* UART */
-  uart uart_i (
-      .clk_i,
-      .rst_ni,
-      .tl_i(uart_tl_h2d),
-      .tl_o(uart_tl_d2h),
-      .cio_rx_i(uart_rx_i),
-      .cio_tx_o(uart_tx_o),
-      .cio_tx_en_o(),
-      .intr_tx_watermark_o(uart_intr_tx_watermark_o),
-      .intr_rx_watermark_o(uart_intr_rx_watermark_o),
-      .intr_tx_empty_o(uart_intr_tx_empty_o),
-      .intr_rx_overflow_o(uart_intr_rx_overflow_o),
-      .intr_rx_frame_err_o(uart_intr_rx_frame_err_o),
-      .intr_rx_break_err_o(uart_intr_rx_break_err_o),
-      .intr_rx_timeout_o(uart_intr_rx_timeout_o),
-      .intr_rx_parity_err_o(uart_intr_rx_parity_err_o)
   );
 
 endmodule : ao_peripheral_subsystem
