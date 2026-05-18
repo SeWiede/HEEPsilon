@@ -21,11 +21,13 @@ from typing import Optional
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR    = Path(__file__).resolve().parent
-SIM_DIR       = SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0/sim-verilator"
-MCU_CFG       = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/mcu_cfg.hjson"
-HEEPSILON_CORE= SCRIPT_DIR / "heepsilon.core"
-DEFAULT_CONDA = "core-v-mini-mcu"
+SCRIPT_DIR         = Path(__file__).resolve().parent
+SIM_DIR            = SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0/sim-verilator"
+HEEPSILON_CORE     = SCRIPT_DIR / "heepsilon.core"
+CONFIGS_DIR        = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/configs"
+HEEPSILON_APPS_DIR = SCRIPT_DIR / "sw/applications"
+XHEEP_APPS_DIR     = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/sw/applications"
+DEFAULT_CONDA      = "core-v-mini-mcu"
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 
@@ -55,38 +57,59 @@ class TestCase:
     enabled:      bool = True
     skip_reason:  str = ""
 
-TESTS: list[TestCase] = [
-    TestCase("cgra_func_test",        r"finished with 0 errors",
+# Apps with known UART output patterns. Everything else is auto-discovered.
+_KNOWN_TESTS: list[TestCase] = [
+    TestCase("hello_world",          r"Hello",
+             description="X-HEEP smoke test"),
+    TestCase("cgra_func_test",       r"finished with 0 errors",
              description="CGRA functionality check"),
-    TestCase("cgra_load_store_test",  r"finished with 0 errors",
+    TestCase("cgra_load_store_test", r"finished with 0 errors",
              description="CGRA load/store check"),
-    TestCase("cgra_alu_test",         r"finished with 0 errors",
-             description="CGRA ALU operation coverage (21 ops)"),
-    TestCase("cgra_leftright_test",   r"finished with 0 errors",
+    TestCase("cgra_alu_test",        r"finished with 0 errors",
+             description="CGRA ALU operation coverage"),
+    TestCase("cgra_leftright_test",  r"finished with 0 errors",
              description="CGRA inter-column data passing via RCL"),
-    TestCase("cgra_fullgrid_test",    r"finished with 0 errors",
-             description="CGRA full 4×4 grid: 16 distinct functions across all RCs"),
-    TestCase("cgra_fft",              r"finished with 0 errors",
+    TestCase("cgra_fullgrid_test",   r"finished with 0 errors",
+             description="CGRA full 4×4 grid"),
+    TestCase("cgra_fft",             r"finished with 0 errors",
              description="CGRA FFT computation"),
-    TestCase("kernel_test",           r"E\t0",
-             description="Multi-kernel benchmark (conv, reversebits, bitcount, sqrt, "
-                         "gsm, strsearch, sha, sha2, sabs)"),
-    TestCase("cgra_dbl_search",       r"finished with 0 errors",
+    TestCase("kernel_test",          r"E\t0",
+             description="Multi-kernel CGRA benchmark"),
+    TestCase("cgra_dbl_search",      r"finished with 0 errors",
              description="CGRA double min/max search"),
-    TestCase("mmul_os",               r"Total cgra:",
-             enabled=False,
-             skip_reason="requires cgra_x_heep.h (not vendored)"),
-    TestCase("trans_versasense",      r"END",
-             enabled=False,
-             skip_reason="requires SYLT-FFT/fft.h (not vendored)"),
-    TestCase("transformer",           r"END",
-             enabled=False,
-             skip_reason="CGRA matmul kernel unsupported matrix sizes; SW fallback too slow"),
 ]
 
+def _discover_tests() -> list[TestCase]:
+    """
+    Start from _KNOWN_TESTS (curated pass patterns), then auto-discover:
+      - HEEPsilon apps (sw/applications/)        → enabled by default
+      - X-HEEP apps   (hw/vendor/.../sw/apps/)   → disabled by default (too many for default CI)
+    Apps already in _KNOWN_TESTS keep their pattern regardless of which dir they live in.
+    """
+    known = {t.app: t for t in _KNOWN_TESTS}
+    result: list[TestCase] = list(_KNOWN_TESTS)
+    seen   = set(known)
+
+    for path in sorted(HEEPSILON_APPS_DIR.iterdir()):
+        if path.is_dir() and path.name not in seen:
+            result.append(TestCase(path.name, pass_pattern=r".",
+                                   description="(heepsilon app)"))
+            seen.add(path.name)
+
+    for path in sorted(XHEEP_APPS_DIR.iterdir()):
+        if path.is_dir() and path.name not in seen:
+            result.append(TestCase(path.name, pass_pattern=r".",
+                                   description="(x-heep app)",
+                                   enabled=False,
+                                   skip_reason="not in default CI run"))
+            seen.add(path.name)
+
+    return result
+
+TESTS = _discover_tests()
 TESTS_BY_NAME: dict[str, TestCase] = {t.app: t for t in TESTS}
 
-# ── Build configurations ───────────────────────────────────────────────────────
+# ── Build configurations (auto-discovered from configs/) ───────────────────────
 
 @dataclass
 class BuildConfig:
@@ -95,19 +118,39 @@ class BuildConfig:
     memory_banks: int
     description:  str
 
-BUILD_CONFIGS: list[BuildConfig] = [
-    BuildConfig("general",  "configs/general.hjson",  2,
-                "2 banks × 32 KB = 64 KB RAM  (minimal)"),
-    BuildConfig("cgra",     "configs/cgra.hjson",     6,
-                "6 banks × 32 KB = 192 KB RAM (standard CGRA)"),
-    BuildConfig("ci",       "configs/ci.hjson",       6,
-                "6 banks × 32 KB = 192 KB RAM (CI variant)"),
-    BuildConfig("cgra_fat", "configs/cgra_fat.hjson", 12,
-                "12 banks × 32 KB = 384 KB RAM (large; default)"),
-]
+def _discover_configs() -> list[BuildConfig]:
+    """
+    Scan CONFIGS_DIR for *.hjson files that define a code_and_data RAM bank
+    structure. Parse num/sizes to compute total RAM. Skips configs without that
+    structure (pad_cfg, example_interleaved, etc.).
+    """
+    import re
+    configs = []
+    for path in sorted(CONFIGS_DIR.glob("*.hjson")):
+        text = path.read_text(errors="replace")
+        if "code_and_data" not in text:
+            continue
+        m = re.search(
+            r"code_and_data\s*:\s*\{[^}]*\bnum\s*:\s*(\d+)[^}]*\bsizes\s*[=:]\s*[\[\s]*(\d+)",
+            text, re.DOTALL,
+        )
+        if not m:
+            continue
+        num, size_kb = int(m.group(1)), int(m.group(2))
+        total_kb = num * size_kb
+        name = path.stem
+        desc = f"{num} banks × {size_kb} KB = {total_kb} KB RAM"
+        configs.append(BuildConfig(name, f"configs/{path.name}", num, desc))
+    return configs
 
+BUILD_CONFIGS: list[BuildConfig] = _discover_configs()
 BUILD_CONFIGS_BY_NAME: dict[str, BuildConfig] = {c.name: c for c in BUILD_CONFIGS}
-DEFAULT_CONFIG = "cgra_fat"
+
+# Prefer cgra_fat if present, otherwise the config with the most banks.
+DEFAULT_CONFIG: str = (
+    "cgra_fat" if "cgra_fat" in BUILD_CONFIGS_BY_NAME
+    else max(BUILD_CONFIGS, key=lambda c: c.memory_banks).name
+)
 
 # ── Environment loading ────────────────────────────────────────────────────────
 
@@ -167,16 +210,10 @@ def run_cmd(
 
 def apply_patches(dry_run: bool = False) -> None:
     """Apply required source-level modifications if not already present."""
-    # 1. stack_size 0x800 → 0x8000
-    text = MCU_CFG.read_text()
-    if "stack_size: 0x800," in text:
-        info(f"Patching {MCU_CFG.name}: stack_size 0x800 → 0x8000")
-        if not dry_run:
-            MCU_CFG.write_text(text.replace("stack_size: 0x800,", "stack_size: 0x8000,"))
-    else:
-        info(f"{MCU_CFG.name}: stack_size already correct")
+    # stack_size/heap_size are now baked into cgra.hjson and cgra_fat.hjson directly
+    # (X-HEEP v1.0.4 removed mcu_cfg.hjson; sizes live in each config file)
 
-    # 2. -Wno-UNDRIVEN in heepsilon.core
+    # -Wno-UNDRIVEN in heepsilon.core (needed for CGRA-specific undriven signals)
     text = HEEPSILON_CORE.read_text()
     if "Wno-UNDRIVEN" not in text:
         info("Patching heepsilon.core: adding -Wno-UNDRIVEN")
@@ -471,10 +508,10 @@ def interactive_mode() -> None:
     disabled = [t for t in TESTS if not t.enabled]
 
     MENU = [
-        "Full CI  (patches + mcu-gen + build + all enabled tests)",
-        "Full CI — matrix across multiple configs",
-        "Tests only  (skip mcu-gen and build)",
-        "Selected tests",
+        "Full CI        — patches + mcu-gen + build + all enabled tests",
+        "Full CI matrix — same, across multiple configs",
+        "Selected tests — patches + mcu-gen + build + chosen tests",
+        "Re-run only    — skip mcu-gen and build (sim already built)",
         "mcu-gen only",
         "Build Verilator simulator only",
         "Apply source patches only",
@@ -530,22 +567,29 @@ def interactive_mode() -> None:
             write_json_report(results, opts["json_report"])
         sys.exit(0 if overall else 1)
 
-    # Choices that involve running tests with a single config
+    # ── Gather ALL inputs before touching the machine ─────────────────────────
     cfg = _pick_config()
-    opts = _gather_run_options()
 
     tests_to_run = enabled
-    if choice == 0:   # Full CI
+    if choice in (2, 3):  # Selected tests or Re-run only
+        labels  = [f"{t.app}  —  {t.description}" for t in enabled]
+        indices = _multi_pick("Select tests to run:", labels)
+        tests_to_run = [enabled[i] for i in indices]
+
+    opts = _gather_run_options()
+
+    # ── Now build and run ──────────────────────────────────────────────────────
+    if choice == 0:   # Full CI — all enabled tests
         ensure_python_deps(opts["dry_run"])
         apply_patches(opts["dry_run"])
         mcu_gen(opts["dry_run"], config=cfg)
         build_sim(opts["dry_run"])
-    elif choice == 2:  # Tests only
-        pass
-    elif choice == 3:  # Selected
-        labels  = [f"{t.app}  —  {t.description}" for t in enabled]
-        indices = _multi_pick("Select tests to run:", labels)
-        tests_to_run = [enabled[i] for i in indices]
+    elif choice == 2:  # Selected tests — full build
+        ensure_python_deps(opts["dry_run"])
+        apply_patches(opts["dry_run"])
+        mcu_gen(opts["dry_run"], config=cfg)
+        build_sim(opts["dry_run"])
+    # choice == 3 (Re-run only) — skip build entirely
 
     results: list[Result] = []
     for tc in tests_to_run:
