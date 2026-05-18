@@ -33,7 +33,7 @@ filesets:
     - x-heep::packages
     files:
     - hw/vendor/esl_epfl_x_heep/tb/ext_bus.sv
-    - hw/vendor/esl_epfl_x_heep/tb/ext_xbar.sv
+    - hw/rtl/ext_xbar.sv
     file_type: systemVerilogSource
 
 
@@ -88,6 +88,7 @@ filesets:
 
   tb-verilator:
     files:
+    - tb/heepsilon_clock_config.hh: { is_include_file: true }
     - tb/XHEEP_CmdLineOptions.hh: { is_include_file: true }
     - tb/XHEEP_CmdLineOptions.cpp
     - tb/tb_top.cpp
@@ -112,7 +113,7 @@ filesets:
   xdc-fpga-pynq-z2:
     files:
     - hw/fpga_cgra/constraints/pynq-z2/pin_assign.xdc
-    - hw/fpga/constraints/pynq-z2/constraints.xdc
+    - hw/fpga_cgra/constraints/pynq-z2/constraints.xdc
     file_type: xdc
 
   ip-fpga-pynq-z1:
@@ -307,7 +308,7 @@ targets:
           - '--x-assign unique'
           - '--x-initial unique'
           - '--exe tb_top.cpp'
-          - '-CFLAGS "-std=c++11 -Wall -g -fpermissive"'
+          - '-CFLAGS "-std=c++14 -Wall -g -fpermissive"'
           - '-LDFLAGS "-pthread -lutil -lelf"'
           - "-Wall"
           - "-Wno-UNDRIVEN"
@@ -332,7 +333,7 @@ targets:
       vivado:
         part: xc7z020clg400-1
         board_part: tul.com.tw:pynq-z2:part0:1.0
-        board_repo_paths: [../../../hw/fpga/board_files/vendor/esl_epfl_pynq_z2_board_files]
+        board_repo_paths: [../../../hw/vendor/esl_epfl_x_heep/hw/fpga/board_files/vendor/esl_epfl_pynq_z2_board_files]
     toplevel: [xilinx_heepsilon_wrapper]
 
   pynq-z1:

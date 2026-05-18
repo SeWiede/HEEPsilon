@@ -23,7 +23,7 @@ module heepsilon_top #(
     inout uart_rx_i,
     inout uart_tx_o,
 
-    inout logic [22:0] gpio_io,
+    inout logic [18:0] gpio_io,
 
     output logic [31:0] exit_value_o,
     inout  logic        exit_valid_o,
@@ -44,11 +44,22 @@ module heepsilon_top #(
     inout logic       spi2_sck_o,
 
     inout logic i2c_scl_io,
-    inout logic i2c_sda_io
+    inout logic i2c_sda_io,
+
+    inout logic spi_slave_sck_io,
+    inout logic spi_slave_cs_io,
+    inout logic spi_slave_mosi_io,
+    inout logic spi_slave_miso_io,
+
+    input  logic cpu_subsystem_powergate_switch_ack_ni,
+    input  logic peripheral_subsystem_powergate_switch_ack_ni,
+    output logic cpu_subsystem_powergate_switch_no,
+    output logic peripheral_subsystem_powergate_switch_no
 );
 
   import obi_pkg::*;
   import reg_pkg::*;
+  import fifo_pkg::*;
   import heepsilon_pkg::*;
 
   // External xbar master/slave and peripheral ports
@@ -66,12 +77,12 @@ module heepsilon_top #(
   obi_resp_t heep_core_data_resp;
   obi_req_t heep_debug_master_req;
   obi_resp_t heep_debug_master_resp;
-  obi_req_t heep_dma_read_ch0_req;
-  obi_resp_t heep_dma_read_ch0_resp;
-  obi_req_t heep_dma_write_ch0_req;
-  obi_resp_t heep_dma_write_ch0_resp;
-  obi_req_t heep_dma_addr_ch0_req;
-  obi_resp_t heep_dma_addr_ch0_resp;
+  obi_req_t  [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] heep_dma_read_req;
+  obi_resp_t [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] heep_dma_read_resp;
+  obi_req_t  [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] heep_dma_write_req;
+  obi_resp_t [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] heep_dma_write_resp;
+  obi_req_t  [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] heep_dma_addr_req;
+  obi_resp_t [core_v_mini_mcu_pkg::DMA_NUM_MASTER_PORTS-1:0] heep_dma_addr_resp;
 
 
 
@@ -86,16 +97,38 @@ module heepsilon_top #(
   // External subsystems
   logic external_subsystem_rst_n;
   logic external_ram_banks_set_retentive_n;
-  /* verilator lint_off unused */
+  /* verilator lint_off UNUSED */
   logic external_subsystem_clkgate_en_n;
   logic external_subsystem_powergate_switch_n;
   logic external_subsystem_powergate_switch_ack_n;
   logic external_subsystem_powergate_iso_n;
 
+  logic cpu_subsystem_powergate_switch_n;
+  logic peripheral_subsystem_powergate_switch_n;
+  /* verilator lint_on UNUSED */
+
+  /* verilator lint_off UNUSEDSIGNAL */
+  fifo_req_t  [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_req;
+  /* verilator lint_on UNUSEDSIGNAL */
+  fifo_resp_t [core_v_mini_mcu_pkg::DMA_CH_NUM-1:0] hw_fifo_resp;
+
   // CGRA logic clock gating unit enable (always-on in this case)
   assign cgra_enable                    = 1'b1;
   assign cgra_logic_rst_n               = external_subsystem_rst_n;
   assign cgra_ram_banks_set_retentive_n = external_ram_banks_set_retentive_n;
+
+  assign external_subsystem_powergate_switch_ack_n = external_subsystem_powergate_switch_n;
+  assign cpu_subsystem_powergate_switch_no         = cpu_subsystem_powergate_switch_n;
+  assign peripheral_subsystem_powergate_switch_no  = peripheral_subsystem_powergate_switch_n;
+
+  always_comb begin
+    for (int i = 0; i < core_v_mini_mcu_pkg::DMA_CH_NUM; i++) begin
+      hw_fifo_resp[i].empty    = 1'b1;
+      hw_fifo_resp[i].full     = 1'b0;
+      hw_fifo_resp[i].alm_full = 1'b0;
+      hw_fifo_resp[i].data     = '0;
+    end
+  end
 
   always_comb begin
     // All interrupt lines set to zero by default
@@ -126,12 +159,12 @@ module heepsilon_top #(
       .heep_core_data_resp_o    (heep_core_data_resp),
       .heep_debug_master_req_i  (heep_debug_master_req),
       .heep_debug_master_resp_o (heep_debug_master_resp),
-      .heep_dma_read_req_i  (heep_dma_read_ch0_req),
-      .heep_dma_read_resp_o (heep_dma_read_ch0_resp),
-      .heep_dma_write_req_i (heep_dma_write_ch0_req),
-      .heep_dma_write_resp_o(heep_dma_write_ch0_resp),
-      .heep_dma_addr_req_i  (heep_dma_addr_ch0_req),
-      .heep_dma_addr_resp_o (heep_dma_addr_ch0_resp),
+      .heep_dma_read_req_i  (heep_dma_read_req),
+      .heep_dma_read_resp_o (heep_dma_read_resp),
+      .heep_dma_write_req_i (heep_dma_write_req),
+      .heep_dma_write_resp_o(heep_dma_write_resp),
+      .heep_dma_addr_req_i  (heep_dma_addr_req),
+      .heep_dma_addr_resp_o (heep_dma_addr_resp),
 
       .ext_master_req_i (ext_master_req),
       .ext_master_resp_o(ext_master_resp),
@@ -168,6 +201,8 @@ module heepsilon_top #(
   ) x_heep_system_i (
       .clk_i,
       .rst_ni,
+      .hart_id_i(32'h0),
+      .xheep_instance_id_i(32'h0),
       .jtag_tck_i,
       .jtag_tms_i,
       .jtag_trst_ni,
@@ -192,15 +227,15 @@ module heepsilon_top #(
       .gpio_11_io    (gpio_io[11]),
       .gpio_12_io    (gpio_io[12]),
       .gpio_13_io    (gpio_io[13]),
-      .gpio_14_io    (gpio_io[14]),
-      .gpio_15_io    (gpio_io[15]),
-      .gpio_16_io    (gpio_io[16]),
-      .gpio_17_io    (gpio_io[17]),
-      .pdm2pcm_pdm_io(gpio_io[18]),
-      .pdm2pcm_clk_io(gpio_io[19]),
-      .i2s_sck_io    (gpio_io[20]),
-      .i2s_ws_io     (gpio_io[21]),
-      .i2s_sd_io     (gpio_io[22]),
+      .pdm2pcm_pdm_io(gpio_io[14]),
+      .pdm2pcm_clk_io(gpio_io[15]),
+      .i2s_sck_io    (gpio_io[16]),
+      .i2s_ws_io     (gpio_io[17]),
+      .i2s_sd_io     (gpio_io[18]),
+      .spi_slave_sck_io (spi_slave_sck_io),
+      .spi_slave_cs_io  (spi_slave_cs_io),
+      .spi_slave_miso_io(spi_slave_miso_io),
+      .spi_slave_mosi_io(spi_slave_mosi_io),
 
       .spi2_cs_0_io(spi2_csb_io[0]),
       .spi2_cs_1_io(spi2_csb_io[1]),
@@ -245,12 +280,19 @@ module heepsilon_top #(
       .ext_core_data_resp_i(heep_core_data_resp),
       .ext_debug_master_req_o(heep_debug_master_req),
       .ext_debug_master_resp_i(heep_debug_master_resp),
-      .ext_dma_read_req_o(heep_dma_read_ch0_req),
-      .ext_dma_read_resp_i(heep_dma_read_ch0_resp),
-      .ext_dma_write_req_o(heep_dma_write_ch0_req),
-      .ext_dma_write_resp_i(heep_dma_write_ch0_resp),
-      .ext_dma_addr_req_o(heep_dma_addr_ch0_req),
-      .ext_dma_addr_resp_i(heep_dma_addr_ch0_resp),
+      .ext_dma_read_req_o(heep_dma_read_req),
+      .ext_dma_read_resp_i(heep_dma_read_resp),
+      .ext_dma_write_req_o(heep_dma_write_req),
+      .ext_dma_write_resp_i(heep_dma_write_resp),
+      .ext_dma_addr_req_o(heep_dma_addr_req),
+      .ext_dma_addr_resp_i(heep_dma_addr_resp),
+      .hw_fifo_req_o(hw_fifo_req),
+      .hw_fifo_resp_i(hw_fifo_resp),
+      .hw_fifo_done_i('0),
+      .cpu_subsystem_powergate_switch_no(cpu_subsystem_powergate_switch_n),
+      .cpu_subsystem_powergate_switch_ack_ni(cpu_subsystem_powergate_switch_ack_ni),
+      .peripheral_subsystem_powergate_switch_no(peripheral_subsystem_powergate_switch_n),
+      .peripheral_subsystem_powergate_switch_ack_ni(peripheral_subsystem_powergate_switch_ack_ni),
       .external_subsystem_clkgate_en_no(external_subsystem_clkgate_en_n),
       .ext_peripheral_slave_req_o(ext_periph_slave_req),
       .ext_peripheral_slave_resp_i(ext_periph_slave_resp),
@@ -264,6 +306,8 @@ module heepsilon_top #(
       .ext_dma_slot_rx_i('0),
       .ext_dma_stop_i('0),
       .dma_done_o(),
+
+      .intr_ext_peripheral_i(1'b0),
 
       .external_subsystem_rst_no(external_subsystem_rst_n),
       .external_ram_banks_set_retentive_no(external_ram_banks_set_retentive_n)

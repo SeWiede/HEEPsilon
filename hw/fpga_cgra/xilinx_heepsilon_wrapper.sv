@@ -36,10 +36,15 @@ module xilinx_heepsilon_wrapper
     inout               uart_rx_i,
     inout               uart_tx_o,
 
-    inout  logic [22:0] gpio_io,
+    inout  logic [18:0] gpio_io,
 
     output logic        exit_value_o,
     inout  logic        exit_valid_o,
+
+    inout  logic        spi_slave_sck_io,
+    inout  logic        spi_slave_cs_io,
+    inout  logic        spi_slave_mosi_io,
+    inout  logic        spi_slave_miso_io,
 
     inout  logic [ 3:0] spi_flash_sd_io,
     inout  logic        spi_flash_csb_o,
@@ -65,6 +70,8 @@ module xilinx_heepsilon_wrapper
   logic [                      31:0] exit_value;
   wire                               rst_n;
   logic [CLK_LED_COUNT_LENGTH - 1:0] clk_count;
+  wire                               cpu_sw_n;
+  wire                               periph_sw_n;
 
   // low active reset
   assign rst_n   = !rst_i;
@@ -134,7 +141,15 @@ module xilinx_heepsilon_wrapper
         .spi2_csb_io,
         .spi2_sck_o,
         .i2c_scl_io,
-        .i2c_sda_io
+        .i2c_sda_io,
+        .spi_slave_sck_io,
+        .spi_slave_cs_io,
+        .spi_slave_mosi_io,
+        .spi_slave_miso_io,
+        .cpu_subsystem_powergate_switch_ack_ni (cpu_sw_n),
+        .peripheral_subsystem_powergate_switch_ack_ni (periph_sw_n),
+        .cpu_subsystem_powergate_switch_no    (cpu_sw_n),
+        .peripheral_subsystem_powergate_switch_no    (periph_sw_n)
   );
 
   assign exit_value_o = exit_value[0];

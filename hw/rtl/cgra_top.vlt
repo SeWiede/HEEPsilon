@@ -5,3 +5,6 @@
 `verilator_config
 
 lint_off -rule UNUSED -file "*hw/rtl/heepsilon_top.sv" -match "Signal is not used: 'external_subsystem_powergate_iso'*"
+lint_off -rule WIDTHEXPAND -file "*hw/core-v-mini-mcu/cpu_subsystem.sv" -match "*x_issue_req_o*"
+lint_off -rule UNUSEDSIGNAL -file "*hw/core-v-mini-mcu/ao_peripheral_subsystem.sv" -match "*spc2ao_req_i*"
+lint_off -rule COMBDLY -file "*cgra/sim/cgra_clock_gate.sv" -match "*"
