@@ -72,6 +72,11 @@ module testharness #(
   wire [1:0] spi_csb;
   wire spi_sck;
 
+  wire spi_slave_sck;
+  wire spi_slave_cs;
+  wire spi_slave_mosi;
+  wire spi_slave_miso;
+
   logic cpu_subsystem_powergate_switch_ack_n[SWITCH_ACK_LATENCY:0];
   logic peripheral_subsystem_powergate_switch_ack_n[SWITCH_ACK_LATENCY:0];
   wire  cpu_subsystem_powergate_switch_n;
@@ -111,6 +116,10 @@ module testharness #(
       .i2c_scl_io(gpio[31]),
       .i2c_sda_io(gpio[30]),
       .exit_value_o,
+      .spi_slave_sck_io(spi_slave_sck),
+      .spi_slave_cs_io(spi_slave_cs),
+      .spi_slave_mosi_io(spi_slave_mosi),
+      .spi_slave_miso_io(spi_slave_miso),
       .cpu_subsystem_powergate_switch_ack_ni(cpu_subsystem_powergate_switch_ack_n[SWITCH_ACK_LATENCY]),
       .peripheral_subsystem_powergate_switch_ack_ni(peripheral_subsystem_powergate_switch_ack_n[SWITCH_ACK_LATENCY]),
       .cpu_subsystem_powergate_switch_no(cpu_subsystem_powergate_switch_n),
