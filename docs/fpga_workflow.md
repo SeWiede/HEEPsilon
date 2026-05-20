@@ -232,8 +232,8 @@ UART pin assignment (UG1267 Table 3-18, HP bank 28, LVCMOS18):
 
 | FPGA pin | Direction | Signal |
 |---|---|---|
-| A20 | FPGA → FT4232H (DDBUS1 RXD) | `uart_tx_o` |
-| C19 | FT4232H (DDBUS0 TXD) → FPGA | `uart_rx_i` |
+| C19 | FPGA → FT4232H (DDBUS0 RXD) | `uart_tx_o` |
+| A20 | FT4232H (DDBUS1 TXD) → FPGA | `uart_rx_i` |
 
 Baudrate: **9600** (defined in `sw/device/target/zcu104/x-heep.h`; ZCU104 MMCM outputs 15 MHz,
 not the 100 MHz assumed by `heepsilon_clock_config.h`).

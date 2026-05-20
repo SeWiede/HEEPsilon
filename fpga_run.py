@@ -55,7 +55,7 @@ BOARD_CONFIG = {
         "program_tcl": SCRIPT_DIR / "program_fpga_zcu104.tcl",
         "vivado_part": "xczu7ev",
         # PL UART goes through FT4232H channel D (interface 3) on the single
-        # "USB JTAG UART" cable.  uart_tx_o = A20, uart_rx_i = C19 (LVCMOS18).
+        # "USB JTAG UART" cable.  uart_tx_o = C19, uart_rx_i = A20 (LVCMOS18).
         # FT4232H channel map: A=JTAG, B=if01/PS-UART0, C=if02/PS-UART1, D=if03/PL-UART.
         "uart_search": [["Xilinx_JTAG+3Serial", "if03"]],
         "baud": 9600,

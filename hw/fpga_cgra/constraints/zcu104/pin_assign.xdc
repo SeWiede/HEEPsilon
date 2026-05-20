@@ -36,11 +36,11 @@ set_property -dict {PACKAGE_PIN M8 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd
 set_property -dict {PACKAGE_PIN K8 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd_io[3]}]
 
 # UART — routed to FT4232H channel D (interface 3) on the single "USB JTAG UART" cable.
-# A20 = UART2_TXD_FPGA_RXD → FT4232H DDBUS1 (RXD input, FT4232H receives from FPGA).
-# C19 = UART2_RXD_FPGA_TXD → FT4232H DDBUS0 (TXD output, FT4232H sends to FPGA).
+# C19 = UART2_RXD_FPGA_TXD → FT4232H DDBUS0 (RXD input, FT4232H receives from FPGA).
+# A20 = UART2_TXD_FPGA_RXD → FT4232H DDBUS1 (TXD output, FT4232H sends to FPGA).
 # Confirmed in UG1267 Table 3-18. Bank 28, LVCMOS18 (1.8 V HP bank).
-set_property -dict {PACKAGE_PIN A20 IOSTANDARD LVCMOS18} [get_ports uart_tx_o]
-set_property -dict {PACKAGE_PIN C19 IOSTANDARD LVCMOS18} [get_ports uart_rx_i]
+set_property -dict {PACKAGE_PIN C19 IOSTANDARD LVCMOS18} [get_ports uart_tx_o]
+set_property -dict {PACKAGE_PIN A20 IOSTANDARD LVCMOS18} [get_ports uart_rx_i]
 
 # JTAG
 set_property -dict {PACKAGE_PIN H8 IOSTANDARD LVCMOS33} [get_ports jtag_tdi_i]

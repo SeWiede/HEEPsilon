@@ -35,8 +35,8 @@ set_property -dict {PACKAGE_PIN M8 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd
 set_property -dict {PACKAGE_PIN K8 IOSTANDARD LVCMOS33} [get_ports {spi_flash_sd_io[3]}]
 
 # UART
-set_property -dict {PACKAGE_PIN A20 IOSTANDARD LVCMOS18} [get_ports uart_tx_o]
-set_property -dict {PACKAGE_PIN C19 IOSTANDARD LVCMOS18} [get_ports uart_rx_i]
+set_property -dict {PACKAGE_PIN C19 IOSTANDARD LVCMOS18} [get_ports uart_tx_o]
+set_property -dict {PACKAGE_PIN A20 IOSTANDARD LVCMOS18} [get_ports uart_rx_i]
 
 # JTAG
 set_property -dict {PACKAGE_PIN H8 IOSTANDARD LVCMOS33} [get_ports jtag_tdi_i]
