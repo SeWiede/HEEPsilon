@@ -26,7 +26,6 @@ FUSESOC 	= $(PWD)/$(VENV)/fusesoc
 PYTHON  	= $(PWD)/$(VENV)/python
 RV_PROFILE 	= $(PWD)/$(VENV)/rv_profile
 AREA_PLOT  	= $(PWD)/$(VENV)/area-plot
-export PATH := $(PWD)/$(VENV):$(PATH)
 else
 $(info USING MINICONDA $(CONDA_DEFAULT_ENV))
 FUSESOC 	:= $(shell which fusesoc)
@@ -35,41 +34,56 @@ RV_PROFILE  := $(shell which rv_profile)
 AREA_PLOT   := $(shell which area-plot)
 endif
 
+# RegTool and StructGen path
+REGTOOL 			?= $(PWD)/hw/vendor/pulp_platform/register_interface/vendor/lowrisc_opentitan/util/regtool.py
+PERIPH_STRUCTS_GEN 	?= $(PWD)/util/periph_structs_gen/periph_structs_gen.py
+TEMPLATE_FILE 		?= $(PWD)/util/periph_structs_gen/periph_structs.tpl
+
 # Build directories
 BUILD_DIR         = build
-FUSESOC_BUILD_DIR = $(shell find $(BUILD_DIR) -maxdepth 1 -type d -name 'openhwgroup.org_systems_core-v-mini-mcu_*' 2>/dev/null | sort | head -n 1)
+FUSESOC_BUILD_DIR = $(shell find $(BUILD_DIR) -maxdepth 1 -type d -name 'openhwgroup.org_systems_core-v-mini-mcu_*' 2>/dev/null | sort -V | head -n 1)
 VERILATOR_DIR     = $(FUSESOC_BUILD_DIR)/sim-verilator
 QUESTASIM_DIR     = $(FUSESOC_BUILD_DIR)/sim-modelsim
 
 # Project options are based on the app to be built (default - hello_world)
-PROJECT  ?= hello_world
+PROJECT ?= hello_world
 
 # Folder where the linker scripts are located
 LINK_FOLDER ?= $(mkfile_path)/sw/linker
 # Linker options are 'on_chip' (default),'flash_load','flash_exec','freertos'
-LINKER   ?= on_chip
+LINKER ?= on_chip
 
 # Target options are 'sim' (default) and 'pynq-z2' and 'nexys-a7-100t'
-TARGET   	?= sim
+TARGET ?= sim
 
 # Mcu-gen configuration files
 X_HEEP_CFG  ?= configs/general.hjson
-PADS_CFG ?= configs/pad_cfg.hjson
+PADS_CFG ?= configs/pad_cfg.py
 PYTHON_X_HEEP_CFG ?=
-# Cached mcu-gen xheep configuration
-XHEEP_CONFIG_CACHE ?= $(BUILD_DIR)/xheep_config_cache.pickle
+
+# MCU-Gen template files to generate
+MCU_GEN_TEMPLATES = $(shell find . \
+  \( -path './hw/vendor/*' ! -path './hw/vendor/xheep' ! -path './hw/vendor/xheep/*' -o \
+     -path './util/*' -o \
+     -path './test/*' \) -prune -o \
+  -name '*.tpl' -print)
+  
+# Optionally, additional external template files can be provided to mcu-gen
+EXTERNAL_MCU_GEN_TEMPLATES ?= 
 
 # Compiler options are 'gcc' (default) and 'clang'
 COMPILER 		?= gcc
-# Compiler prefix options are 'riscv32-unknown-' (default) and 'riscv32-corev-'
-COMPILER_PREFIX ?= riscv32-corev-
+# Compiler prefix options are 'riscv32-corev-' (default) and 'riscv32-unknown-'
+COMPILER_PREFIX ?= $(shell basename $$(ls $(RISCV_XHEEP)/bin/*gcc 2>/dev/null | head -1) | sed 's/elf-gcc$$//')
 # Compiler flags to be passed (for both linking and compiling)
 COMPILER_FLAGS 	?=
 # Arch options are any RISC-V ISA string supported by the CPU. Default 'rv32imc_zicsr'
 ARCH     		?= rv32imc_zicsr
+# Tell clang to use the gcc link instead of the llvm linker (useful for old clang). Default '0' (set it to 1)
+CLANG_LINKER_USE_LD ?= 0
 
 # Path relative from the location of sw/Makefile from which to fetch source files. The directory of that file is the default value.
-SOURCE 	 ?= $(".")
+SOURCE ?= $(".")
 
 # Simulation engines options are verilator (default) and questasim
 SIMULATOR ?= verilator
@@ -101,9 +115,13 @@ else
 endif
 
 # Area plot default configuration
-AREA_PLOT_RPT 		?= $(word 1, $(shell [ -d $(BUILD_DIR) ] && find $(BUILD_DIR) -type f -name "*area*.rpt" 2>/dev/null)) # path to the area report file
-AREA_PLOT_OUTDIR 	?= $(BUILD_DIR)/area-plot/ # output directory for the area plot
-AREA_PLOT_TOP 		?=# top level module to consider for the area plot (automatically infer)
+AREA_PLOT_RPT    ?= $(word 1, $(shell [ -d $(BUILD_DIR) ] && find $(BUILD_DIR) -type f -name "*area*.rpt" 2>/dev/null)) # path to the area report file
+AREA_PLOT_OUTDIR ?= $(BUILD_DIR)/area-plot/ # output directory for the area plot
+AREA_PLOT_TOP    ?=# top level module to consider for the area plot (automatically infer)
+
+# Vendored IPs
+VENDOR_FILES	:= $(shell find hw/vendor sw/vendor -maxdepth 2 -type f -name "*.vendor.hjson" -print)
+VENDOR_LOCKS	:= $(subst .vendor.hjson,.lock.hjson,$(VENDOR_FILES))
 
 # Export variables to sub-makefiles
 export
@@ -122,45 +140,14 @@ conda:
 ## @param X_HEEP_CFG=[configs/general.hjson(default),<path-to-config-file>]
 ## @param PYTHON_X_HEEP_CFG=[configs/general.py(default),<path-to-config-file>]
 mcu-gen:
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --config $(X_HEEP_CFG) --python_config $(PYTHON_X_HEEP_CFG) --pads_cfg $(PADS_CFG) --cpu $(CPU) --bus $(BUS) --memorybanks $(MEMORY_BANKS) --memorybanks_il $(MEMORY_BANKS_IL) --external_domains $(EXTERNAL_DOMAINS)
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/include/core_v_mini_mcu_pkg.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/core_v_mini_mcu.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/system_bus.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/system_xbar.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/memory_subsystem.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/ao_peripheral_subsystem.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/peripheral_subsystem.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/core-v-mini-mcu/cpu_subsystem.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/system/x_heep_system.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/system/pad_ring.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/system/pad_control/data/pad_control.hjson.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/system/pad_control/rtl/pad_control.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/soc_ctrl/data/soc_ctrl.hjson.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/power_manager/rtl/power_manager.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/power_manager/data/power_manager.hjson.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/pdm2pcm/data/pdm2pcm.hjson.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/pdm2pcm/rtl/pdm2pcm.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/pdm2pcm/rtl/pdm_core.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/dma/data/dma.hjson.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/ip/dma/data/dma_conf.svh.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/fpga/sram_wrapper.sv.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl hw/fpga/scripts/generate_sram.tcl.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl tb/tb_util.svh.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl $(LINK_FOLDER)/link.ld.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl $(LINK_FOLDER)/link_flash_load.ld.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl $(LINK_FOLDER)/link_flash_exec.ld.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl sw/device/lib/crt/crt0.S.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl sw/device/lib/runtime/core_v_mini_mcu.h.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl sw/device/lib/runtime/core_v_mini_mcu_memory.h.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl sw/device/lib/drivers/power_manager/power_manager.h.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl scripts/pnr/core-v-mini-mcu.upf.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl scripts/pnr/core-v-mini-mcu.dc.upf.tpl
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl util/profile/run_profile.sh.tpl
+	$(PYTHON) util/mcu_gen.py --config $(X_HEEP_CFG) --python_config $(PYTHON_X_HEEP_CFG) --pads_cfg $(PADS_CFG) --outtpl "$(MCU_GEN_TEMPLATES)" --externaltpl "$(EXTERNAL_MCU_GEN_TEMPLATES)" --cpu $(CPU) --bus $(BUS) --memorybanks $(MEMORY_BANKS) --memorybanks_il $(MEMORY_BANKS_IL) --external_domains $(EXTERNAL_DOMAINS)
 	bash -c "cd hw/ip/soc_ctrl; source soc_ctrl_gen.sh; cd ../../../"
 	bash -c "cd hw/ip/power_manager; source power_manager_gen.sh; cd ../../../"
 	bash -c "cd hw/ip/pdm2pcm; source pdm2pcm_gen.sh; cd ../../../"
 	bash -c "cd hw/system/pad_control; source pad_control_gen.sh; cd ../../../"
-	bash -c "cd hw/ip/dma; source dma_gen.sh; cd ../../../"
+	bash -c "cd hw/vendor/xheep/dma; source dma_gen.sh; cd ../../../"
+	bash -c "cd hw/ip/boot_rom; make clean; make all; cd ../../../"
+	$(MAKE) -C hw/vendor/xheep/spi reg SW_DIR=$(PWD)/sw/device/lib/drivers/
 	$(MAKE) verible
 
 ## Display mcu_gen.py help
@@ -171,7 +158,7 @@ mcu-gen-help:
 verible: | .check-verible
 	util/format-verible;
 
-## Runs black formating for python xheep generator files
+## Runs black formating for python files
 format-python:
 	$(PYTHON) -m black util/x_heep_gen
 	$(PYTHON) -m black util/periph_structs_gen
@@ -179,24 +166,27 @@ format-python:
 	$(PYTHON) -m black util/waiver-gen.py
 	$(PYTHON) -m black util/c_gen.py
 	$(PYTHON) -m black test/test_x_heep_gen
+	$(PYTHON) -m black test/test_apps
+	$(PYTHON) -m black configs
 
 ## @section APP FW Build
 
 ## Generates the build folder in sw using CMake to build (compile and linking)
 ## @param PROJECT=<folder_name_of_the_project_to_be_built>
-## @param TARGET=sim(default),systemc,pynq-z2,nexys-a7-100t,zcu104,zcu102
+## @param TARGET=sim(default),systemc,pynq-z2,nexys-a7-100t,genesys2,aup-zu3,zcu102,zcu104
 ## @param LINKER=on_chip(default),flash_load,flash_exec
 ## @param COMPILER=gcc(default),clang
-## @param COMPILER_PREFIX=riscv32-unknown-(default)
+## @param COMPILER_PREFIX=riscv32-corev-(default),riscv32-unknown-
 ## @param ARCH=rv32imc(default),<any_RISC-V_ISA_string_supported_by_the_CPU>
 app: clean-app
-	@$(MAKE) -C sw PROJECT=$(PROJECT) TARGET=$(TARGET) LINKER=$(LINKER) LINK_FOLDER=$(LINK_FOLDER) COMPILER=$(COMPILER) COMPILER_PREFIX=$(COMPILER_PREFIX) COMPILER_FLAGS=$(COMPILER_FLAGS) ARCH=$(ARCH) SOURCE=$(SOURCE) \
+	@$(MAKE) -C sw PROJECT=$(PROJECT) TARGET=$(TARGET) LINKER=$(LINKER) LINK_FOLDER=$(LINK_FOLDER) COMPILER=$(COMPILER) COMPILER_PREFIX=$(COMPILER_PREFIX) COMPILER_FLAGS="$(COMPILER_FLAGS)" ARCH=$(ARCH) SOURCE=$(SOURCE) CLANG_LINKER_USE_LD=$(CLANG_LINKER_USE_LD) \
 	|| { \
 	echo "\033[0;31mHmmm... seems like the compilation failed...\033[0m"; \
 	echo "\033[0;31mIf you do not understand why, it is likely that you either:\033[0m"; \
 	echo "\033[0;31m  a) offended the Leprechaun of Electronics\033[0m"; \
 	echo "\033[0;31m  b) forgot to run make mcu-gen\033[0m"; \
-	echo "\033[0;31mI would start by checking b) if I were you!\033[0m"; \
+	echo "\033[0;31m  c) forgot to set the correct compiler parameters (check the docs!)\033[0m"; \
+	echo "\033[0;31mI would start by checking b) or c) if I were you!\033[0m"; \
 	exit 1; \
 	}
 	@$(PYTHON) scripts/building/mem_usage.py
@@ -271,10 +261,28 @@ verilator-run-sc:
 verilator-waves: .check-gtkwave
 	gtkwave $(VERILATOR_DIR)/waveform.fst
 
+## Launches the RTL simulation with the compiled firmware (`app` target) using
+## the Questasim model previously built (`questasim-build` target).
+questasim-run: 
+	$(MAKE) -C $(QUESTASIM_DIR) run PLUSARGS="c firmware=../../../sw/build/main.hex"
+
+## First builds the app and then uses Questasim to simulate the HW model and run the FW
+questasim-run-app: app
+	$(MAKE) -C $(QUESTASIM_DIR) run PLUSARGS="c firmware=../../../sw/build/main.hex"
+
+## Launches the RTL simulation with the compiled firmware (`app` target) using
+## the Questasim model with HDL optimized compilation previously built (`questasim-build-opt` target).
+questasim-run-opt: 
+	$(MAKE) -C $(QUESTASIM_DIR) run RUN_OPT=1 PLUSARGS="c firmware=../../../sw/build/main.hex"
+
+## First builds the app and then uses Questasim to simulate the HW optimized model and run the FW
+questasim-run-opt-app: app
+	$(MAKE) -C $(QUESTASIM_DIR) run RUN_OPT=1 PLUSARGS="c firmware=../../../sw/build/main.hex"
+
 ## @section Vivado
 
 ## Builds (synthesis and implementation) the bitstream for the FPGA version using Vivado
-## @param FPGA_BOARD=nexys-a7-100t,pynq-z2,zcu104,zcu102
+## @param FPGA_BOARD=pynq-z2,nexys-a7-100t,genesys2,aup-zu3,zcu102,zcu104
 ## @param FUSESOC_FLAGS=--flag=<flagname>
 vivado-fpga:
 	$(FUSESOC) --cores-root . run --no-export --target=$(FPGA_BOARD) $(FUSESOC_FLAGS) --build openhwgroup.org:systems:core-v-mini-mcu $(FUSESOC_PARAM) 2>&1 | tee buildvivado.log
@@ -283,7 +291,7 @@ vivado-fpga-nobuild:
 	$(FUSESOC) --cores-root . run --no-export --target=$(FPGA_BOARD) $(FUSESOC_FLAGS) --setup openhwgroup.org:systems:core-v-mini-mcu $(FUSESOC_PARAM) 2>&1 | tee buildvivado.log
 
 ## Loads the generated bitstream into the FPGA
-## @param FPGA_BOARD=nexys-a7-100t,pynq-z2,zcu104,zcu102
+## @param FPGA_BOARD=pynq-z2,nexys-a7-100t,genesys2,aup-zu3,zcu102,zcu104
 vivado-fpga-pgm:
 	$(FUSESOC) --cores-root . run --no-export --target=$(FPGA_BOARD) $(FUSESOC_FLAGS) --run openhwgroup.org:systems:core-v-mini-mcu $(FUSESOC_PARAM) 2>&1 | tee programfpga.log
 
@@ -339,17 +347,17 @@ gdb_connect:
 test:
 	$(MAKE) mcu-gen X_HEEP_CFG=configs/ci.hjson
 	$(RM) test/*.log
-	python3 test/test_apps/test_apps.py $(TEST_FLAGS) 2>&1 | tee test/test_apps/test_apps.log
+	$(PYTHON) test/test_apps/test_apps.py $(TEST_FLAGS) 2>&1 | tee test/test_apps/test_apps.log
 	@echo "You can also find the output in test/test_apps/test_apps.log"
-	python3 test/test_x_heep_gen/test_peripherals.py
+	$(PYTHON) test/test_x_heep_gen/test_peripherals.py
 	@echo "You can also find the peripheral test outputs in test/test_x_heep_gen/outputs"
 
-.PHONY: test_kwargs
-test_kwargs:
-	$(MAKE) mcu-gen X_HEEP_CFG=configs/ci.hjson PADS_CFG=test/test_x_heep_gen/pads/pad_cfg.hjson
-	$(PYTHON) util/mcu_gen.py --cached_path $(XHEEP_CONFIG_CACHE) --cached --outtpl test/test_x_heep_gen/pads/output/kwargs_output.json.tpl
-	python3 test/test_x_heep_gen/pad_test.py
-
+## Compares two mcu-gen runs and lists the differences in the generated files. 
+## It can be used to manually check if a change in the configuration or in the mcu-gen code has an
+## effect on the generated files.
+.PHONY: compare-mcu-gen
+compare-mcu-gen:
+	$(PYTHON) test/test_x_heep_gen/compare_mcu_gen.py
 
 ## Builds the specified app, loads it into the programmer's flash and then opens picocom to see the output
 ## @param PROJECT=<folder_name_of_the_project_to_be_built>
@@ -376,6 +384,16 @@ profile:
 .PHONY: area-plot
 area-plot:
 	$(AREA_PLOT) --filename $(AREA_PLOT_RPT) --out-dir $(AREA_PLOT_OUTDIR) --top-module $(AREA_PLOT_TOP)
+
+## @section Vendored IPs
+## Update the vendored IPs based on the .vendor.hjson description files
+.PHONY: vendor-update
+vendor-update: $(VENDOR_LOCKS)
+	python3 util/check-vendor.py
+
+$(VENDOR_LOCKS): %.lock.hjson: %.vendor.hjson util/vendor.py
+	@echo "### Updating vendored IP '$(notdir $*)'..."
+	python3 util/vendor.py -vU $<
 
 ## @section Cleaning commands
 

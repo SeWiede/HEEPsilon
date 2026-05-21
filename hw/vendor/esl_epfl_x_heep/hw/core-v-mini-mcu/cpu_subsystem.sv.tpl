@@ -4,6 +4,7 @@
 
 <%
   cpu = xheep.cpu()
+  xif = xheep.xif()
 %>
 
 module cpu_subsystem
@@ -11,13 +12,7 @@ module cpu_subsystem
   import core_v_mini_mcu_pkg::*;
 #(
     parameter BOOT_ADDR = 'h180,
-    parameter COREV_PULP =  0, // PULP ISA Extension (incl. custom CSRs and hardware loop, excl. p.elw)
-    parameter FPU = 0,  // Floating Point Unit (interfaced via APU interface)
-    parameter ZFINX = 0,  // Float-in-General Purpose registers
-    parameter NUM_MHPMCOUNTERS = 1,
-    parameter DM_HALTADDRESS = '0,
-    parameter X_EXT = 0,  // eXtension interface in cv32e40x
-    parameter core_v_mini_mcu_pkg::cpu_type_e CPU_TYPE = core_v_mini_mcu_pkg::CpuType
+    parameter DM_HALTADDRESS = '0
 ) (
     // Clock and Reset
     input logic clk_i,
@@ -64,16 +59,27 @@ module cpu_subsystem
   assign core_instr_req_o.we    = '0;
   assign core_instr_req_o.be    = 4'b1111;
 
-  if (CPU_TYPE == cv32e20) begin : gen_cv32e20
+% if cpu.name == "cv32e20":
+
+<%
+cv32e20_params = []
+
+if cpu.is_defined("rv32e"):
+    cv32e20_params.append(f".RV32E({cpu.get_sv_str('rv32e')})")
+
+if cpu.is_defined("rv32m"):
+    cv32e20_params.append(f".RV32M(cve2_pkg::{cpu.get_sv_str('rv32m')})")
+
+if xif != None:
+    cv32e20_params.append(f".X_INTERFACE(1'b1)")
+    cv32e20_params.append(f".X_INTERFACE_NUM_RS({xif.x_num_rs})")
+
+if cpu.is_defined("num_mhpmcounters"):
+    cv32e20_params.append(f".MHPMCounterNum({cpu.get_sv_str('num_mhpmcounters')})")
+%>
 
     cve2_xif_wrapper #(
-% if cpu.is_defined("rv32e"):
-        .RV32E(${cpu.get_sv_str("rv32e")}),
-% endif
-% if cpu.is_defined("rv32m"):
-        .RV32M(cve2_pkg::${cpu.get_sv_str("rv32m")}),
-% endif
-        .XInterface(X_EXT)
+${",\n".join(cv32e20_params)}
     ) cv32e20_i (
         .clk_i (clk_i),
         .rst_ni(rst_ni),
@@ -109,52 +115,43 @@ module cpu_subsystem
         .debug_halted_o(),
 
         // CORE-V-XIF
-        // Compressed interface
-        .x_compressed_valid_o(xif_compressed_if.compressed_valid),
-        .x_compressed_ready_i(xif_compressed_if.compressed_ready),
-        .x_compressed_req_o  (xif_compressed_if.compressed_req),
-        .x_compressed_resp_i (xif_compressed_if.compressed_resp),
-
-        // Issue Interface
-        .x_issue_valid_o(xif_issue_if.issue_valid),
-        .x_issue_ready_i(xif_issue_if.issue_ready),
-        .x_issue_req_o  (xif_issue_if.issue_req),
-        .x_issue_resp_i (xif_issue_if.issue_resp),
-
-        // Commit Interface
-        .x_commit_valid_o(xif_commit_if.commit_valid),
-        .x_commit_o(xif_commit_if.commit),
-
-        // Memory Request/Response Interface
-        .x_mem_valid_i(xif_mem_if.mem_valid),
-        .x_mem_ready_o(xif_mem_if.mem_ready),
-        .x_mem_req_i  (xif_mem_if.mem_req),
-        .x_mem_resp_o (xif_mem_if.mem_resp),
-
-        // Memory Result Interface
-        .x_mem_result_valid_o(xif_mem_result_if.mem_result_valid),
-        .x_mem_result_o(xif_mem_result_if.mem_result),
-
-        // Result Interface
-        .x_result_valid_i(xif_result_if.result_valid),
-        .x_result_ready_o(xif_result_if.result_ready),
-        .x_result_i(xif_result_if.result),
+        .xif_compressed_if,
+        .xif_issue_if,
+        .xif_commit_if,
+        .xif_mem_if,
+        .xif_mem_result_if,
+        .xif_result_if,
 
         .fetch_enable_i(fetch_enable),
-
         .core_sleep_o
     );
 
     assign irq_ack_o = '0;
     assign irq_id_o  = '0;
 
-  end else if (CPU_TYPE == cv32e40x) begin : gen_cv32e40x
+% elif cpu.name == "cv32e40x":
 
-    // instantiate the core
+<%
+cv32e40x_params = []
+
+if xif != None:
+    cv32e40x_params.append(f".X_INTERFACE(1'b1)")
+    cv32e40x_params.append(f".X_NUM_RS({xif.x_num_rs})")
+    cv32e40x_params.append(f".X_ID_WIDTH({xif.x_id_width})")
+    cv32e40x_params.append(f".X_MEM_WIDTH({xif.x_mem_width})")
+    cv32e40x_params.append(f".X_RFR_WIDTH({xif.x_rfr_width})")
+    cv32e40x_params.append(f".X_RFW_WIDTH({xif.x_rfw_width})")
+    cv32e40x_params.append(f".X_MISA({xif.x_misa})")
+    cv32e40x_params.append(f".X_ECS_XS({xif.x_ecs_xs})")
+
+if cpu.is_defined("num_mhpmcounters"):
+    cv32e40x_params.append(f".NUM_MHPMCOUNTERS({cpu.get_sv_str('num_mhpmcounters')})")
+
+cv32e40x_params.append(f".DBG_NUM_TRIGGERS(0)")
+%>
+
     cv32e40x_core #(
-        .NUM_MHPMCOUNTERS(NUM_MHPMCOUNTERS),
-        .X_EXT(X_EXT[0]),
-        .DBG_NUM_TRIGGERS('0)
+${",\n".join(cv32e40x_params)}
     ) cv32e40x_core_i (
         // Clock and reset
         .clk_i(clk_i),
@@ -243,19 +240,39 @@ module cpu_subsystem
     assign irq_ack_o = '0;
     assign irq_id_o  = '0;
 
-  end else if (CPU_TYPE == cv32e40px) begin : gen_cv32e40px
+% elif cpu.name == "cv32e40px":
 
     import cv32e40px_core_v_xif_pkg::*;
 
-    // instantiate the core
-    cv32e40px_top #(
-        .COREV_X_IF      (X_EXT),
-        .COREV_PULP      (COREV_PULP),
-        .COREV_CLUSTER   (0),
-        .FPU             (FPU),
-        .ZFINX           (ZFINX),
-        .NUM_MHPMCOUNTERS(NUM_MHPMCOUNTERS)
-    ) cv32e40px_top_i (
+<%
+cv32e40px_params = []
+
+if cpu.is_defined("fpu"):
+    cv32e40px_params.append(f".FPU({cpu.get_sv_str('fpu')})")
+
+if cpu.is_defined("fpu_addmul_lat"):
+    cv32e40px_params.append(f".FPU_ADDMUL_LAT({cpu.get_sv_str('fpu_addmul_lat')})")
+
+if cpu.is_defined("fpu_others_lat"):
+    cv32e40px_params.append(f".FPU_OTHERS_LAT({cpu.get_sv_str('fpu_others_lat')})")
+
+if cpu.is_defined("zfinx"):
+    cv32e40px_params.append(f".ZFINX({cpu.get_sv_str('zfinx')})")
+
+if cpu.is_defined("corev_pulp"):
+    cv32e40px_params.append(f".COREV_PULP({cpu.get_sv_str('corev_pulp')})")
+
+if cpu.is_defined("num_mhpmcounters"):
+    cv32e40px_params.append(f".NUM_MHPMCOUNTERS({cpu.get_sv_str('num_mhpmcounters')})")
+
+if xif != None:
+    cv32e40px_params.append(f".X_INTERFACE(1'b1)")
+    cv32e40px_params.append(f".X_INTERFACE_NUM_RS({xif.x_num_rs})")
+%>
+
+    cv32e40px_xif_wrapper #(
+${",\n".join(cv32e40px_params)}
+    ) cv32e40px_xif_wrapper_i (
         .clk_i (clk_i),
         .rst_ni(rst_ni),
 
@@ -284,36 +301,12 @@ module cpu_subsystem
         .data_rvalid_i(core_data_resp_i.rvalid),
 
         // CORE-V-XIF
-        // Compressed interface
-        .x_compressed_valid_o(xif_compressed_if.compressed_valid),
-        .x_compressed_ready_i(xif_compressed_if.compressed_ready),
-        .x_compressed_req_o  (xif_compressed_if.compressed_req),
-        .x_compressed_resp_i (xif_compressed_if.compressed_resp),
-
-        // Issue Interface
-        .x_issue_valid_o(xif_issue_if.issue_valid),
-        .x_issue_ready_i(xif_issue_if.issue_ready),
-        .x_issue_req_o  (xif_issue_if.issue_req),
-        .x_issue_resp_i (xif_issue_if.issue_resp),
-
-        // Commit Interface
-        .x_commit_valid_o(xif_commit_if.commit_valid),
-        .x_commit_o(xif_commit_if.commit),
-
-        // Memory Request/Response Interface
-        .x_mem_valid_i(xif_mem_if.mem_valid),
-        .x_mem_ready_o(xif_mem_if.mem_ready),
-        .x_mem_req_i  (xif_mem_if.mem_req),
-        .x_mem_resp_o (xif_mem_if.mem_resp),
-
-        // Memory Result Interface
-        .x_mem_result_valid_o(xif_mem_result_if.mem_result_valid),
-        .x_mem_result_o(xif_mem_result_if.mem_result),
-
-        // Result Interface
-        .x_result_valid_i(xif_result_if.result_valid),
-        .x_result_ready_o(xif_result_if.result_ready),
-        .x_result_i(xif_result_if.result),
+        .xif_compressed_if,
+        .xif_issue_if,
+        .xif_commit_if,
+        .xif_mem_if,
+        .xif_mem_result_if,
+        .xif_result_if,
 
         .irq_i    (irq_i),
         .irq_ack_o(irq_ack_o),
@@ -329,29 +322,32 @@ module cpu_subsystem
 
     );
 
-  end else begin : gen_cv32e40p
+% else:
 
-    // instantiate the core
+<%
+cv32e40p_params = []
+
+if cpu.is_defined("fpu"):
+    cv32e40p_params.append(f".FPU({cpu.get_sv_str('fpu')})")
+
+if cpu.is_defined("fpu_addmul_lat"):
+    cv32e40p_params.append(f".FPU_ADDMUL_LAT({cpu.get_sv_str('fpu_addmul_lat')})")
+
+if cpu.is_defined("fpu_others_lat"):
+    cv32e40p_params.append(f".FPU_OTHERS_LAT({cpu.get_sv_str('fpu_others_lat')})")
+
+if cpu.is_defined("zfinx"):
+    cv32e40p_params.append(f".ZFINX({cpu.get_sv_str('zfinx')})")
+
+if cpu.is_defined("corev_pulp"):
+    cv32e40p_params.append(f".COREV_PULP({cpu.get_sv_str('corev_pulp')})")
+
+if cpu.is_defined("num_mhpmcounters"):
+    cv32e40p_params.append(f".NUM_MHPMCOUNTERS({cpu.get_sv_str('num_mhpmcounters')})")
+%>
+
     cv32e40p_top #(
-% if cpu.is_defined("fpu"):
-        .FPU(${cpu.get_sv_str("fpu")}),
-% endif
-% if cpu.is_defined("fpu_addmul_lat"):
-        .FPU_ADDMUL_LAT(${cpu.get_sv_str("fpu_addmul_lat")}),
-% endif
-% if cpu.is_defined("fpu_others_lat"):
-        .FPU_OTHERS_LAT(${cpu.get_sv_str("fpu_others_lat")}),
-% endif
-% if cpu.is_defined("zfinx"):
-        .ZFINX(${cpu.get_sv_str("zfinx")}),
-% endif
-% if cpu.is_defined("corev_pulp"):
-        .COREV_PULP(${cpu.get_sv_str("corev_pulp")}),
-% endif
-% if cpu.is_defined("num_mhpmcounters"):
-        .NUM_MHPMCOUNTERS(${cpu.get_sv_str("num_mhpmcounters")}),
-% endif
-        .COREV_CLUSTER(0)
+${",\n".join(cv32e40p_params)}
     ) cv32e40p_top_i (
         .clk_i (clk_i),
         .rst_ni(rst_ni),
@@ -393,6 +389,6 @@ module cpu_subsystem
         .core_sleep_o
     );
 
-  end
+% endif
 
 endmodule

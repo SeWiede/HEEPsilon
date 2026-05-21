@@ -1,9 +1,16 @@
 {
-    bus_type: "onetoM"
+    bus_type: "NtoM"
     ram_banks: {
         code_and_data: {
             num: 6
             sizes: 32
+        }
+        data_interleaved: {
+            auto_section: auto
+            // the name is used by example_matadd_interleaved as .xheep_data_interleaved
+            type: interleaved
+            num: 4
+            size: 16
         }
     }
 
@@ -58,7 +65,12 @@
         }
         spi_memio: {
             offset:  0x00028000
-            length:  0x00008000
+            length:  0x00000008
+        }
+        w25q128jw_controller: {
+            offset:  0x00029000
+            length:  0x00007000
+            is_included: "yes"
         }
         dma: {
             offset:  0x00030000
@@ -151,6 +163,21 @@
             length:  0x00010000
             is_included: "yes"
         }
+        serial_link: {
+            offset:  0x00090000
+            length:  0x00010000
+            is_included: "yes"
+        }
+        serial_link_reg: {
+            offset:  0x000A0000
+            length:  0x00010000
+            is_included: "yes"
+        }
+        serial_link_receiver_fifo: {
+            offset:  0x000B0000
+            length:  0x00010000
+            is_included: "yes"
+        }
 
     }
 
@@ -219,6 +246,7 @@
             intr_host_timeout:       48
             spi2_intr_event:         49
             i2s_intr_event:          50
+            w25q128jw_controller_intr_event:        51
         }
     }
 }

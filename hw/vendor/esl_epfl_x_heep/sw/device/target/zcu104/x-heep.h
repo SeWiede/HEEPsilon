@@ -11,20 +11,12 @@
 extern "C" {
 #endif  // __cplusplus
 
-#include "heepsilon_clock_config.h"
 
-// ZCU104 PLL: 300 MHz in → DIVCLK/10 → MULT*32.875 → VCO 986.25 MHz → /65.75 → 15 MHz out.
-// heepsilon_clock_config.h uses 100 MHz (simulation value); override here for correct UART NCO.
-#undef REFERENCE_CLOCK_Hz
-#define REFERENCE_CLOCK_Hz 15000000
+#define REFERENCE_CLOCK_Hz (15*1000*1000) // 15 MHz for FPGA synthesis
 #define UART_BAUDRATE 9600
 // Calculation formula: NCO = 16 * 2^nco_width * baud / fclk.
-// NCO creates 16x of baudrate. So, in addition to the nco_width,
-// 2^4 should be multiplied.
-// We assume that the lowest baudrate will be 9600, and the largest 256000. 
-// Given this range, by dividing by 100 it always remains integer and below 32-bits.
-// This saves us the need of performing 64-bit divisions to compute NCO. 
-#define UART_NCO ((uint32_t)(((uint32_t)((uint32_t)(UART_BAUDRATE/100))<<20)/((uint32_t)(REFERENCE_CLOCK_Hz/100))))
+// Note that this will be calculated at compile time, so no 64-bit operations will be performed in CPU.
+#define UART_NCO ((uint32_t)( (((uint64_t)UART_BAUDRATE * 16) << 16) / REFERENCE_CLOCK_Hz ))
 #define TARGET_ZCU104 1
 #define TARGET_IS_FPGA 1
 
@@ -32,7 +24,8 @@ extern "C" {
  * As the hw is configurable, we can have setups with different number of
  * Gpio pins
  */
-#define MAX_PIN 32
+#define MAX_PIN     32
+
 
 #ifdef __cplusplus
 }  // extern "C"

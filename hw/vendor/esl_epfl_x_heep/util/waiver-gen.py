@@ -18,10 +18,7 @@ def get_verilator_major_version():
             ["verilator", "--version"], capture_output=True, text=True, check=True
         )
         output = result.stdout
-        # Try to match "Verilator X.XXX" format first (Homebrew), then "rev vX.XXX" (source build)
-        match = re.search(r"Verilator (\d+)\.\d+", output)
-        if not match:
-            match = re.search(r"rev v(\d+)\.\d+", output)
+        match = re.search(r"rev v(\d+)\.\d+", output)
 
         if not match:
             print(
@@ -94,7 +91,7 @@ def generate_core_file(config, major_version):
     try:
         with open(output_filename, "w", encoding="utf-8") as f:
             f.write("CAPI=2:\n")
-            yaml.dump(core_contents, f, encoding="utf-8", Dumper=yaml.SafeDumper)
+            yaml.dump(core_contents, f, encoding="utf-8", Dumper=yaml.CSafeDumper)
             print(
                 f"> INFO: Successfully wrote additional dependencies to '{output_filename}'"
             )

@@ -2,24 +2,19 @@
 // Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
-`include "heepsilon_clock_config.svh"
-
 module tb_top #(
-    parameter COREV_PULP                  = 0,
-    parameter FPU                         = 0,
-    parameter ZFINX                       = 0,
+    parameter FPU_SS_ZFINX                = 0,
     parameter JTAG_DPI                    = 0,
-    parameter X_EXT                       = 0,
     parameter USE_EXTERNAL_DEVICE_EXAMPLE = 1
 );
 
   // comment to record execution trace
   //`define TRACE_EXECUTION
 
-  localparam int unsigned CLK_FREQUENCY_KHz = `HEEPSILON_CPU_CLK_KHZ;
-  localparam time CLK_PERIOD = 1s / (CLK_FREQUENCY_KHz * 1000);
-  localparam time CLK_PHASE_HI = CLK_PERIOD / 2;
-  localparam time CLK_PHASE_LO = CLK_PERIOD / 2;
+  const time CLK_PHASE_HI = 5ns;
+  const time CLK_PHASE_LO = 5ns;
+  localparam CLK_FREQUENCY_KHz = 100_000;
+  const time CLK_PERIOD = CLK_PHASE_HI + CLK_PHASE_LO;
 
   const time STIM_APPLICATION_DEL = CLK_PERIOD * 0.1;
   const time RESP_ACQUISITION_DEL = CLK_PERIOD * 0.9;
@@ -111,8 +106,8 @@ module tb_top #(
         end
       end else begin
         $display(
-            "[TESTBENCH]: No SPI Option specified, using execute from flash (execute_from_flash=1)");
-        execute_from_flash = 1;
+            "[TESTBENCH]: No SPI Option specified, using load from flash (execute_from_flash=0)");
+        execute_from_flash = 0;
       end
     end
 
@@ -195,10 +190,6 @@ module tb_top #(
 
   // wrapper for riscv, the memory system and stdout peripheral
   testharness #(
-      .COREV_PULP                 (COREV_PULP),
-      .FPU                        (FPU),
-      .ZFINX                      (ZFINX),
-      .X_EXT                      (X_EXT),
       .JTAG_DPI                   (JTAG_DPI),
       .USE_EXTERNAL_DEVICE_EXAMPLE(USE_EXTERNAL_DEVICE_EXAMPLE),
       .CLK_FREQUENCY              (CLK_FREQUENCY_KHz)

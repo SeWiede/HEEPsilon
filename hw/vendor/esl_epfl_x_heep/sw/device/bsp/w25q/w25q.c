@@ -36,6 +36,7 @@ extern "C" {
 #include "string.h"
 
 #include "w25q128jw.h"
+#include "w25q128jw_sector_size.h"
 
 /* To manage addresses. */
 #include "mmio.h"
@@ -218,7 +219,7 @@ spi_host_t* __attribute__((section(".xheep_init_data_crt0"))) spi; //this variab
  * of the vector, is not possible to allocate it dinamically as it would cause a stack
  * or heap overflow.
 */
-uint8_t sector_data[FLASH_SECTOR_SIZE];
+uint8_t w25q128jw_sector_data[FLASH_SECTOR_SIZE];
 
 
 /****************************************************************************/
@@ -264,10 +265,8 @@ w25q_error_codes_t w25q128jw_init(spi_host_t* spi_host) {
     // Power up flash
     flash_power_up();
 
-    // Set QE bit (only FPGA, simulation do not support status registers at all)
-    #ifndef TARGET_SIM
+    // Set QE bit
     if (set_QE_bit() == FLASH_ERROR) return FLASH_ERROR; // Error occurred while setting QE bit
-    #endif // TARGET_SIM
 
     return FLASH_OK; // Success
 }
@@ -451,22 +450,20 @@ w25q_error_codes_t w25q128jw_erase_and_write_standard(uint32_t addr, void* data,
         uint32_t sector_start_addr = current_addr & 0xfffff000;
 
         // Read the full sector and save it into RAM
-        status = w25q128jw_read_standard(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_read_standard(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
-        // Erase the sector (no need to do so in simulation)
-        #ifndef TARGET_SIM
+        // Erase the sector
         w25q128jw_4k_erase(sector_start_addr);
-        #endif // TARGET_SIM
 
         // Calculate the length of data to write in this sector
         uint32_t write_length = MIN(FLASH_SECTOR_SIZE - (current_addr - sector_start_addr), remaining_length);
 
         // Modify the data in RAM to include the new data
-        memcpy(&sector_data[current_addr - sector_start_addr], current_data, write_length);
+        memcpy(&w25q128jw_sector_data[current_addr - sector_start_addr], current_data, write_length);
 
         // Write the modified data back to the flash
-        status = w25q128jw_write_standard(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_write_standard(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
         // Update the remaining length, address and data pointer
@@ -522,6 +519,8 @@ w25q_error_codes_t w25q128jw_read_standard_dma(uint32_t addr, void *data, uint32
     };
     // Size is in data units (words in this case)
     trans.size_d1_du = length>>2;
+
+    asm volatile("davide3: add x0, x0, %0\n\t" : : "r"(length>>2));
 
     // Validate, load and launch DMA transaction
 
@@ -682,22 +681,20 @@ w25q_error_codes_t w25q128jw_erase_and_write_standard_dma(uint32_t addr, void* d
         uint32_t sector_start_addr = current_addr & 0xfffff000;
 
         // Read the full sector and save it into RAM
-        status = w25q128jw_read_standard_dma(sector_start_addr, sector_data, FLASH_SECTOR_SIZE, 0, 0);
+        status = w25q128jw_read_standard_dma(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE, 0, 0);
         if (status != FLASH_OK) return FLASH_ERROR;
 
-        // Erase the sector (no need to do so in simulation)
-        #ifndef TARGET_SIM
+        // Erase the sector
         w25q128jw_4k_erase(sector_start_addr);
-        #endif // TARGET_SIM
 
         // Calculate the length of data to write in this sector
         uint32_t write_length = MIN(FLASH_SECTOR_SIZE - (current_addr - sector_start_addr), remaining_length);
 
         // Modify the data in RAM to include the new data
-        memcpy(&sector_data[current_addr - sector_start_addr], current_data, write_length);
+        memcpy(&w25q128jw_sector_data[current_addr - sector_start_addr], current_data, write_length);
 
         // Write the modified data back to the flash
-        status = w25q128jw_write_standard_dma(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_write_standard_dma(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
         // Update the remaining length, address and data pointer
@@ -743,11 +740,7 @@ uint32_t* w25q128jw_read_quad_setup(uint32_t addr, void *data, uint32_t length) 
 
     // Quad read requires dummy clocks
     const uint32_t dummy_clocks_cmd = spi_create_command((spi_command_t){
-        #ifndef TARGET_SIM
         .len        = DUMMY_CLOCKS_FAST_READ_QUAD_IO-1, // W25Q128JW flash needs 4 dummy cycles
-        #else
-        .len        = DUMMY_CLOCKS_SIM-1, // SPI flash simulation model needs 8 dummy cycles
-        #endif
         .csaat      = true,              // Command not finished
         .speed      = SPI_SPEED_QUAD,     // Quad speed
         .direction  = SPI_DIR_DUMMY       // Dummy
@@ -805,11 +798,7 @@ w25q_error_codes_t w25q128jw_read_quad(uint32_t addr, void *data, uint32_t lengt
 
     // Quad read requires dummy clocks
     const uint32_t dummy_clocks_cmd = spi_create_command((spi_command_t){
-        #ifndef TARGET_SIM
-        .len        = DUMMY_CLOCKS_FAST_READ_QUAD_IO-1,
-        #else
-        .len        = DUMMY_CLOCKS_SIM-1,
-        #endif
+        .len        = DUMMY_CLOCKS_FAST_READ_QUAD_IO-1, // W25Q128JW flash needs 4 dummy cycles
         .csaat      = true,            // Command not finished
         .speed      = SPI_SPEED_QUAD,   // Quad speed
         .direction  = SPI_DIR_DUMMY     // Dummy
@@ -891,22 +880,20 @@ w25q_error_codes_t w25q128jw_erase_and_write_quad(uint32_t addr, void *data, uin
         uint32_t sector_start_addr = current_addr & 0xfffff000;
 
         // Read the full sector and save it into RAM
-        status = w25q128jw_read_quad(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_read_quad(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
-        // Erase the sector (no need to do so in simulation)
-        #ifndef TARGET_SIM
+        // Erase the sector
         w25q128jw_4k_erase(sector_start_addr);
-        #endif // TARGET_SIM
 
         // Calculate the length of data to write in this sector
         uint32_t write_length = MIN(FLASH_SECTOR_SIZE - (current_addr - sector_start_addr), remaining_length);
 
         // Modify the data in RAM to include the new data
-        memcpy(&sector_data[current_addr - sector_start_addr], current_data, write_length);
+        memcpy(&w25q128jw_sector_data[current_addr - sector_start_addr], current_data, write_length);
 
         // Write the modified data back to the flash
-        status = w25q128jw_write_quad(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_write_quad(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
         // Update the remaining length, address and data pointer
@@ -953,11 +940,7 @@ w25q_error_codes_t w25q128jw_read_quad_dma(uint32_t addr, void *data, uint32_t l
 
     // Quad read requires dummy clocks
     const uint32_t dummy_clocks_cmd = spi_create_command((spi_command_t){
-        #ifndef TARGET_SIM
         .len        = DUMMY_CLOCKS_FAST_READ_QUAD_IO-1, // W25Q128JW flash needs 4 dummy cycles
-        #else
-        .len        = DUMMY_CLOCKS_SIM-1, // SPI flash simulation model needs 8 dummy cycles
-        #endif
         .csaat      = true,              // Command not finished
         .speed      = SPI_SPEED_QUAD,     // Quad speed
         .direction  = SPI_DIR_DUMMY       // Dummy
@@ -1075,11 +1058,7 @@ w25q_error_codes_t w25q128jw_read_quad_dma_async(uint32_t addr, void *data, uint
 
     // Quad read requires dummy clocks
     const uint32_t dummy_clocks_cmd = spi_create_command((spi_command_t){
-        #ifndef TARGET_SIM
         .len        = DUMMY_CLOCKS_FAST_READ_QUAD_IO-1, // W25Q128JW flash needs 4 dummy cycles
-        #else
-        .len        = DUMMY_CLOCKS_SIM-1, // SPI flash simulation model needs 8 dummy cycles
-        #endif
         .csaat      = true,              // Command not finished
         .speed      = SPI_SPEED_QUAD,     // Quad speed
         .direction  = SPI_DIR_DUMMY       // Dummy
@@ -1184,22 +1163,20 @@ w25q_error_codes_t w25q128jw_erase_and_write_quad_dma(uint32_t addr, void *data,
         uint32_t sector_start_addr = current_addr & 0xfffff000;
 
         // Read the full sector and save it into RAM
-        status = w25q128jw_read_quad_dma(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_read_quad_dma(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
-        // Erase the sector (no need to do so in simulation)
-        #ifndef TARGET_SIM
+        // Erase the sector
         w25q128jw_4k_erase(sector_start_addr);
-        #endif // TARGET_SIM
 
         // Calculate the length of data to write in this sector
         uint32_t write_length = MIN(FLASH_SECTOR_SIZE - (current_addr - sector_start_addr), remaining_length);
 
         // Modify the data in RAM to include the new data
-        memcpy(&sector_data[current_addr - sector_start_addr], current_data, write_length);
+        memcpy(&w25q128jw_sector_data[current_addr - sector_start_addr], current_data, write_length);
 
         // Write the modified data back to the flash
-        status = w25q128jw_write_quad_dma(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_write_quad_dma(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
         // Update the remaining length, address and data pointer
@@ -1539,22 +1516,20 @@ w25q_error_codes_t erase_and_write(uint32_t addr, uint8_t *data, uint32_t length
         uint32_t sector_start_addr = current_addr & 0xfffff000;
 
         // Read the full sector and save it into RAM
-        status = w25q128jw_read(sector_start_addr, sector_data, FLASH_SECTOR_SIZE);
+        status = w25q128jw_read(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE);
         if (status != FLASH_OK) return FLASH_ERROR;
 
-        // Erase the sector (no need to do so in simulation)
-        #ifndef TARGET_SIM
+        // Erase the sector
         w25q128jw_4k_erase(sector_start_addr);
-        #endif // TARGET_SIM
 
         // Calculate the length of data to write in this sector
         uint32_t write_length = MIN(FLASH_SECTOR_SIZE - (current_addr - sector_start_addr), remaining_length);
 
         // Modify the data in RAM to include the new data
-        memcpy(&sector_data[current_addr - sector_start_addr], current_data, write_length);
+        memcpy(&w25q128jw_sector_data[current_addr - sector_start_addr], current_data, write_length);
 
         // Write the modified data back to the flash (without erasing this time)
-        status = w25q128jw_write(sector_start_addr, sector_data, FLASH_SECTOR_SIZE, 0);
+        status = w25q128jw_write(sector_start_addr, w25q128jw_sector_data, FLASH_SECTOR_SIZE, 0);
         if (status != FLASH_OK) return FLASH_ERROR;
 
         // Update the remaining length, address and data pointer
@@ -1666,10 +1641,10 @@ static w25q_error_codes_t page_write(uint32_t addr, uint8_t *data, uint32_t leng
     spi_set_command(spi, cmd_write_2);
     spi_wait_for_ready(spi);
 
-    // Wait for flash to be ready again (FPGA only)
-    #ifndef TARGET_SIM
+    // Wait for flash to be ready again
     flash_wait();
-    #endif // TARGET_SIM
+
+    return FLASH_OK;
 }
 
 static w25q_error_codes_t dma_send_toflash(uint8_t *data, uint32_t length) {

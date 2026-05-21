@@ -106,5 +106,3 @@ set_property -dict {PACKAGE_PIN F12 IOSTANDARD LVCMOS18} [get_ports spi2_sd_0_io
 set_property -dict {PACKAGE_PIN E12 IOSTANDARD LVCMOS18} [get_ports spi2_sd_1_io]
 set_property -dict {PACKAGE_PIN H13 IOSTANDARD LVCMOS18} [get_ports spi2_sd_2_io]
 set_property -dict {PACKAGE_PIN H12 IOSTANDARD LVCMOS18} [get_ports spi2_sd_3_io]
-
-

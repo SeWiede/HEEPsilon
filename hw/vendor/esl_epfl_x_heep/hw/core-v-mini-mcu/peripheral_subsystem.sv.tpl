@@ -27,6 +27,8 @@ module peripheral_subsystem
     output logic                irq_plic_o,
     output logic                msip_o,
 
+    input  logic                w25q128jw_controller_intr_i,
+
     // UART
     input  logic uart_rx_i,
     output logic uart_tx_o,
@@ -82,6 +84,13 @@ module peripheral_subsystem
     input  logic i2s_sd_i,
     output logic i2s_rx_valid_o,
 
+    % if user_peripheral_domain.contains_peripheral('serial_link'):
+      //Serial Link
+      input  logic [serial_link_single_channel_reg_pkg::NumChannels-1:0]    ddr_rcv_clk_i,  
+      output logic [serial_link_single_channel_reg_pkg::NumChannels-1:0]    ddr_rcv_clk_o,
+      input  logic [serial_link_single_channel_reg_pkg::NumChannels-1:0][serial_link_minimum_axi_pkg::NumLanes-1:0] ddr_i,
+      output logic [serial_link_single_channel_reg_pkg::NumChannels-1:0][serial_link_minimum_axi_pkg::NumLanes-1:0] ddr_o,
+    %endif
     // PDM2PCM Interface
     output logic pdm2pcm_clk_o,
     output logic pdm2pcm_clk_en_o,
@@ -146,7 +155,7 @@ module peripheral_subsystem
   logic uart_intr_rx_break_err;
   logic uart_intr_rx_timeout;
   logic uart_intr_rx_parity_err;
-
+  
   // this avoids lint errors
   assign unused_irq_id = irq_id;
 
@@ -179,6 +188,7 @@ module peripheral_subsystem
   assign intr_vector[${interrupts["intr_host_timeout"]}] = i2c_intr_host_timeout;
   assign intr_vector[${interrupts["spi2_intr_event"]}] = spi2_intr_event;
   assign intr_vector[${interrupts["i2s_intr_event"]}] = i2s_intr_event;
+  assign intr_vector[${interrupts["w25q128jw_controller_intr_event"]}] = w25q128jw_controller_intr_i;
 
   // External interrupts assignement
   for (genvar i = 0; i < NEXT_INT; i++) begin : gen_external_intr_vect
@@ -342,6 +352,7 @@ module peripheral_subsystem
       .cio_sd_i(spi_sd_i),
       .rx_valid_o(spi_rx_valid_o),
       .tx_ready_o(spi_tx_ready_o),
+      .hw2reg_status_o(),
       .intr_error_o(),
       .intr_spi_event_o(spi_intr_event_o)
   );
@@ -503,6 +514,7 @@ module peripheral_subsystem
       .cio_sd_i(spi2_sd_i),
       .rx_valid_o(),
       .tx_ready_o(),
+      .hw2reg_status_o(),
       .intr_error_o(),
       .intr_spi_event_o(spi2_intr_event)
   );
@@ -568,6 +580,7 @@ module peripheral_subsystem
   assign i2s_rx_valid_o   = 1'b0;
 % endif
 
+  
 % if user_peripheral_domain.contains_peripheral('uart'):
 
   reg_to_tlul #(
@@ -620,6 +633,28 @@ module peripheral_subsystem
 
 % endif
 
+% if user_peripheral_domain.contains_peripheral('serial_link'):
+  serial_link_xheep_wrapper #(
+    .MaxClkDiv(32),
+    .DataWidth(32)
+  ) serial_link_xheep_wrapper_i (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .clk_reg_i(clk_i),       
+    .rst_reg_ni(rst_ni),      
+    .testmode_i('0),
+    .writer_req_i(peripheral_slv_req[core_v_mini_mcu_pkg::SERIAL_LINK_IDX]),
+    .writer_rsp_i(peripheral_slv_rsp[core_v_mini_mcu_pkg::SERIAL_LINK_IDX]),
+    .reader_req_i(peripheral_slv_req[core_v_mini_mcu_pkg::SERIAL_LINK_RECEIVER_FIFO_IDX]),
+    .reader_resp_o(peripheral_slv_rsp[core_v_mini_mcu_pkg::SERIAL_LINK_RECEIVER_FIFO_IDX]),
+    .cfg_req_i(peripheral_slv_req[core_v_mini_mcu_pkg::SERIAL_LINK_REG_IDX]),
+    .cfg_rsp_o(peripheral_slv_rsp[core_v_mini_mcu_pkg::SERIAL_LINK_REG_IDX]),
+    .ddr_rcv_clk_i,         
+    .ddr_i,                   
+    .ddr_rcv_clk_o,          
+    .ddr_o                   
+  );
+%endif
 
 % if len(user_peripheral_domain.get_peripherals()) == 0:
   // If no peripherals are selected, tie off the slave response

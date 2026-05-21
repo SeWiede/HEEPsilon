@@ -3,10 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
 module testharness #(
-    parameter bit COREV_PULP                  = 0,
-    parameter bit FPU                         = 0,
-    parameter bit ZFINX                       = 0,
-    parameter bit X_EXT                       = 0,
     parameter bit USE_EXTERNAL_DEVICE_EXAMPLE = 0,
     parameter     JTAG_DPI                    = 0,
     parameter     CLK_FREQUENCY               = 'd100_000  //KHz
@@ -82,12 +78,7 @@ module testharness #(
   wire  cpu_subsystem_powergate_switch_n;
   wire  peripheral_subsystem_powergate_switch_n;
 
-  heepsilon_top #(
-      .COREV_PULP(COREV_PULP),
-      .FPU(FPU),
-      .ZFINX(ZFINX),
-      .X_EXT(X_EXT)
-  ) heepsilon_top_i (
+  heepsilon_top heepsilon_top_i (
       .clk_i(clk),
       .rst_ni(rst_n),
       .boot_select_i(boot_select),

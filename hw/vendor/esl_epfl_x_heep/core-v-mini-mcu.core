@@ -4,7 +4,7 @@ CAPI=2:
 # Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
 # SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
-name: openhwgroup.org:systems:core-v-mini-mcu:1.0.4
+name: openhwgroup.org:systems:core-v-mini-mcu:1.0.5
 description: CORE-V MINI-MCU Top.
 
 filesets:
@@ -14,12 +14,12 @@ filesets:
     - openhwgroup.org:ip:cv32e40p
     - openhwgroup.org:ip:cv32e40x
     - openhwgroup:cve2:cve2_top
-    - esl_epfl:ip:cv32e40px
     - pulp-platform.org:ip:gpio
     - pulp-platform.org::common_cells
-    - pulp-platform.org::cluster_interconnect
+    - pulp-platform.org::axi:0.39.8
     - pulp-platform.org::riscv_dbg
     - pulp-platform.org::register_interface
+    - pulp-platform.org::serial_link
     - openhwgroup.org:ip:soc_ctrl
     - lowrisc:ip:uart:0.1
     - lowrisc:ip:rv_plic_example:0.1
@@ -27,26 +27,31 @@ filesets:
     - lowrisc:ip:spi_host:1.0
     - lowrisc:ip:i2c:0.1
     - yosyshq:picorv32_spimemio:0-r1
+    - x-heep:ip:cv32e40px
     - x-heep:obi_spimemio:0.1.0
     - x-heep:ip:boot_rom
     - x-heep:ip:dma
     - x-heep:ip:dma_subsystem
     - x-heep:ip:i2s
+    - x-heep:ip:spi
+    - x-heep:ip:cluster_interconnect
     - x-heep:ip:power_manager
     - x-heep:ip:fast_intr_ctrl
     - x-heep:ip:obi_fifo
     - x-heep:ip:pdm2pcm
+    - x-heep:ip:serial_link_xheep_wrapper
     - esl_epfl:ip:obi_spi_slave
+    - x-heep:ip:w25q128jw_controller
     files:
     - hw/core-v-mini-mcu/core_v_mini_mcu.sv
     - hw/core-v-mini-mcu/cpu_subsystem.sv
     - hw/core-v-mini-mcu/cve2_xif_wrapper.sv
+    - hw/core-v-mini-mcu/cv32e40px_xif_wrapper.sv
     - hw/core-v-mini-mcu/memory_subsystem.sv
     - hw/core-v-mini-mcu/xbar_varlat_one_to_n.sv
     - hw/core-v-mini-mcu/xbar_varlat_n_to_one.sv
     - hw/core-v-mini-mcu/system_bus.sv
     - hw/core-v-mini-mcu/system_xbar.sv
-    - hw/core-v-mini-mcu/spi_subsystem.sv
     - hw/core-v-mini-mcu/debug_subsystem.sv
     - hw/core-v-mini-mcu/peripheral_subsystem.sv
     - hw/core-v-mini-mcu/ao_peripheral_subsystem.sv
@@ -86,7 +91,6 @@ filesets:
     - hw/ip/soc_ctrl/soc_ctrl.vlt
     - hw/ip/boot_rom/boot_rom.vlt
     - hw/ip/obi_spimemio/obi_spimemio.vlt
-    - hw/ip/dma/dma.vlt
     - hw/ip/dma_subsystem/dma_subsystem.vlt
     - hw/ip/pdm2pcm/pdm2pcm.vlt
     - hw/ip_examples/pdm2pcm_dummy/pdm2pcm_dummy.vlt
@@ -95,7 +99,7 @@ filesets:
     - hw/system/pad_control/pad_control.vlt
     - hw/system/x_heep_system.vlt
     - hw/simulation/simulation.vlt
-    - hw/ip/i2s/i2s.vlt
+    - hw/ip/serial_link_xheep_wrapper/serial_link_xheep_wrapper.vlt
     file_type: vlt
 
   rtl-fpga:
@@ -186,35 +190,11 @@ filesets:
       - hw/asic/sky130/constraint.sdc : {file_type: SDC}
 
 parameters:
-  COREV_PULP:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables COREV_PULP custom RISC-V extensions. Admitted values: 1|0.
-    default: 0
-  FPU:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables RV32F RISC-V extensions. Admitted values: 1|0.
-    default: 0
-  ZFINX:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables RV32Zfinx RISC-V extensions. Admitted values: 1|0.
-    default: 0
   JTAG_DPI:
     datatype: int
     paramtype: vlogparam
     description: |
       Enables testbench JTAG DIPs. Admitted values: 1|0.
-    default: 0
-  X_EXT:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables CORE-V-XIF interface for the CV32E40X and CV32E40PX cores. Admitted values: 1|0.
     default: 0
   USE_EXTERNAL_DEVICE_EXAMPLE:
     datatype: int
@@ -260,6 +240,14 @@ parameters:
     datatype: bool
     paramtype: vlogdefine
     default: false
+  FPGA_AUP_ZU3:
+    datatype: bool
+    paramtype: vlogdefine
+    default: false
+  FPGA_GENESYS2:
+    datatype: bool
+    paramtype: vlogdefine
+    default: false
   # Make the parameter known to FuseSoC to enable overrides from the
   # command line. If not overwritten, use the generic technology library.
   PRIM_DEFAULT_IMPL:
@@ -267,6 +255,16 @@ parameters:
     paramtype: vlogdefine
     description: Primitives implementation to use, e.g. "prim_pkg::ImplGeneric".
     default: prim_pkg::ImplGeneri
+  COMMON_CELLS_ASSERTS_OFF:
+    datatype: bool
+    description: Turn off asserts for PULP common cells
+    paramtype: vlogdefine
+    default: false
+  ASSERTS_OFF:
+    datatype: bool
+    description: Turn off asserts for PULP common cells
+    paramtype: vlogdefine
+    default: false
 
 scripts:
   # Build utils
@@ -342,14 +340,12 @@ targets:
       post_run:
         - print_uart_log
     parameters:
-    - COREV_PULP
-    - FPU
-    - ZFINX
     - JTAG_DPI
-    - X_EXT
     - USE_EXTERNAL_DEVICE_EXAMPLE
     - USE_UPF
     - REMOVE_OBI_FIFO
+    - COMMON_CELLS_ASSERTS_OFF
+    - ASSERTS_OFF
     tools:
       modelsim:
         vlog_options:
@@ -389,6 +385,7 @@ targets:
       verilator:
         mode: cc
         verilator_options:
+          - '--sv'
           - '--cc'
           - '--trace'
           - '--trace-fst'
@@ -412,11 +409,7 @@ targets:
     toplevel:
     - tool_verilator? (testharness)
     parameters:
-    - COREV_PULP
-    - FPU
-    - ZFINX
     - JTAG_DPI
-    - X_EXT
     - USE_EXTERNAL_DEVICE_EXAMPLE
     - USE_UPF
     - REMOVE_OBI_FIFO
@@ -451,10 +444,6 @@ targets:
     - x_heep_system
     - rtl-fpga
     parameters:
-    - COREV_PULP
-    - FPU
-    - ZFINX
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -474,10 +463,6 @@ targets:
     - x_heep_system
     - rtl-fpga
     parameters:
-    - COREV_PULP
-    - FPU
-    - ZFINX
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -496,10 +481,6 @@ targets:
     - x_heep_system
     - rtl-fpga
     parameters:
-    - COREV_PULP
-    - FPU
-    - ZFINX
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -510,7 +491,7 @@ targets:
         board_part: xilinx.com:zcu104:part0:1.0
         board_repo_paths: [../../../hw/fpga/board_files/vendor/esl_epfl_zcu104_board_files]
     toplevel: [xilinx_core_v_mini_mcu_wrapper]
-    
+
   zcu102:
     <<: *default_target
     default_tool: vivado
@@ -519,9 +500,6 @@ targets:
     - x_heep_system
     - rtl-fpga
     parameters:
-    - COREV_PULP
-    - FPU
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -533,16 +511,50 @@ targets:
         board_repo_paths: [../../../hw/fpga/board_files/vendor/zcu102]
     toplevel: [xilinx_core_v_mini_mcu_wrapper]
 
+  aup-zu3:
+    <<: *default_target
+    default_tool: vivado
+    description: RD aup-zu3 Board
+    filesets_append:
+    - x_heep_system
+    - rtl-fpga
+    parameters:
+    - SYNTHESIS=true
+    - REMOVE_OBI_FIFO
+    - FPGA_SYNTHESIS=true
+    - FPGA_AUP_ZU3=true
+    tools:
+      vivado:
+        part: xczu3eg-sfvc784-2-e
+        board_part: realdigital.org:aup-zu3-8gb:part0:1.0
+        board_repo_paths: [../../../hw/fpga/board_files/vendor/aup-zu3-8gb/1.0]
+    toplevel: [xilinx_core_v_mini_mcu_wrapper]
+
+  genesys2:
+    <<: *default_target
+    default_tool: vivado
+    description: Genesys2 Evaluation Board
+    filesets_append:
+    - x_heep_system
+    - rtl-fpga
+    parameters:
+    - SYNTHESIS=true
+    - REMOVE_OBI_FIFO
+    - FPGA_SYNTHESIS=true
+    - FPGA_GENESYS2=true
+    tools:
+      vivado:
+        part: xc7k325tffg900-2
+        board_part: digilentinc.com:genesys2:part0:1.1
+        board_repo_paths: [../../../hw/fpga/board_files/vendor/genesys2]
+    toplevel: [xilinx_core_v_mini_mcu_wrapper]
+
   asic_synthesis:
     <<: *default_target
     default_tool: design_compiler
     description: Design Compiler Script
     parameters:
     - PRIM_DEFAULT_IMPL=prim_pkg::your_target_technology
-    - COREV_PULP
-    - X_EXT
-    - FPU
-    - ZFINX
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     filesets_append:
@@ -562,10 +574,6 @@ targets:
     default_tool: openroad
     description: yosys
     parameters:
-      - COREV_PULP
-      - FPU
-      - ZFINX
-      - X_EXT
       - SYNTHESIS=true
       - VERILATOR=true
       - REMOVE_OBI_FIFO

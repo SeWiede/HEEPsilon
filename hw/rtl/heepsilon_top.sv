@@ -2,12 +2,7 @@
 // Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
 // SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
 
-module heepsilon_top #(
-    parameter COREV_PULP = 0,
-    parameter FPU        = 0,
-    parameter ZFINX      = 0,
-    parameter X_EXT      = 0
-) (
+module heepsilon_top (
     inout logic clk_i,
     inout logic rst_ni,
 
@@ -193,10 +188,6 @@ module heepsilon_top #(
   if_xif #() ext_if ();
 
   x_heep_system #(
-      .COREV_PULP(COREV_PULP),
-      .FPU(FPU),
-      .ZFINX(ZFINX),
-      .X_EXT(X_EXT),
       .EXT_XBAR_NMASTER(CGRA_XBAR_NMASTER)
   ) x_heep_system_i (
       .clk_i,

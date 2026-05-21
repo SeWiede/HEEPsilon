@@ -39,19 +39,27 @@ extern "C" {
 #define AO_PERIPHERAL_END_ADDRESS (AO_PERIPHERAL_START_ADDRESS + AO_PERIPHERAL_SIZE)
 
 % for peripheral in base_peripheral_domain.get_peripherals():
+% if peripheral.get_name() == 'dma' and not base_peripheral_domain.get_dma().get_is_included():
+
+% else:
 #define ${peripheral.get_name().upper()}_START_ADDRESS (AO_PERIPHERAL_START_ADDRESS + ${hex(peripheral.get_address())})
 #define ${peripheral.get_name().upper()}_SIZE ${hex(peripheral.get_length())}
 #define ${peripheral.get_name().upper()}_END_ADDRESS (${peripheral.get_name().upper()}_START_ADDRESS + ${peripheral.get_name().upper()}_SIZE)
 #define ${peripheral.get_name().upper()}_IDX ${loop.index}
-% if peripheral.get_name() == "dma" and dma.get_is_included():
 #define ${peripheral.get_name().upper()}_IS_INCLUDED
 % endif
 %endfor
 
 // This section is here to have default values for the peripherals that are not included in the user peripheral domain. Their are used in their respective structs.h files.
 // Some other files, like applications main c file, use also some peripheral attributes but the file is not generated if the peripheral is not included in the user peripheral domain.
+% if not base_peripheral_domain.get_dma().get_is_included():
+#define DMA_START_ADDRESS 0
+% endif
 % if not base_peripheral_domain.contains_peripheral('spi_flash'):
 #define SPI_FLASH_START_ADDRESS 0
+% endif
+% if not base_peripheral_domain.contains_peripheral('w25q128jw_controller'):
+#define W25Q128JW_CONTROLLER_START_ADDRESS 0
 % endif
 % if not base_peripheral_domain.contains_peripheral('gpio_ao'):
 #define GPIO_AO_START_ADDRESS 0
@@ -62,9 +70,9 @@ extern "C" {
 // End of the section
 
 
-#define DMA_CH_NUM ${hex(dma.get_num_channels())[2:]}
-#define DMA_CH_SIZE 0x${hex(dma.get_ch_length())[2:]}
-#define DMA_NUM_MASTER_PORTS ${hex(dma.get_num_master_ports())[2:]}
+#define DMA_CH_NUM ${hex(dma.get_num_channels())}
+#define DMA_CH_SIZE ${hex(dma.get_ch_length())}
+#define DMA_NUM_MASTER_PORTS ${hex(dma.get_num_master_ports())}
 #define DMA_ADDR_MODE ${dma.get_addr_mode()}
 #define DMA_SUBADDR_MODE ${dma.get_subaddr_mode()}
 #define DMA_HW_FIFO_MODE ${dma.get_hw_fifo_mode()}
@@ -112,6 +120,9 @@ extern "C" {
 % if not user_peripheral_domain.contains_peripheral('uart'):
 #define UART_START_ADDRESS 0
 % endif
+% if not user_peripheral_domain.contains_peripheral('serial_link'):
+#define SERIAL_LINK_REG_START_ADDRESS 0
+% endif
 // End of the section
 
 #define EXT_SLAVE_START_ADDRESS 0x${ext_slave_start_address}
@@ -127,15 +138,10 @@ extern "C" {
 #define ${key.upper()} ${value}
 % endfor
 
-% if xheep.get_padring().pads_attributes != None:
-% for pad in xheep.get_padring().pad_list:
-#define ${pad.localparam}_ATTRIBUTE ${pad.index}
-% endfor
-% endif
-
 #define GPIO_AO_DOMAIN_LIMIT 8
 
 #ifndef __ASSEMBLER__
+#include <stdint.h>
 //heep functions prototypes
 uint32_t * heep_get_flash_address_offset(uint32_t* data_address_lma);
 void heep_init_lfsr();

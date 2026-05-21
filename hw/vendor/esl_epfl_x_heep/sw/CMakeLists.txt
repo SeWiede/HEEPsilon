@@ -432,8 +432,10 @@ message( "${Magenta}Linker file: ${LINKER_SCRIPT}${ColourReset}")
 # Setting-up the properties, elf is
 set_target_properties(${MAINFILE}.elf PROPERTIES LINK_DEPENDS "${LINKER_SCRIPT}")
 
+message(STATUS "${Magenta}CLANG_LINKER_USE_LD = '${CLANG_LINKER_USE_LD}'")
+
 # Linker control (support both GCC and Clang)
-if (${COMPILER} MATCHES "clang")
+if (${COMPILER} MATCHES "clang" AND NOT CLANG_LINKER_USE_LD)
   # Linker flags for Clang
   message(STATUS "${Magenta}Using Clang/lld specific linker flags${ColourReset}")
   SET(CMAKE_EXE_LINKER_FLAGS  "-T ${LINKER_SCRIPT}  \
