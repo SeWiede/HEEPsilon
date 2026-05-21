@@ -149,29 +149,11 @@ filesets:
     - linux_femu/constraints/constraints.xdc: {file_type: xdc}
 
 parameters:
-  COREV_PULP:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables COREV_PULP custom RISC-V extension on the CV32E40P core. Admitted values: 1|0.
-    default: 0
-  FPU:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables RV32F RISC-V extension on the CV32E40P core. Admitted values: 1|0.
-    default: 0
   JTAG_DPI:
     datatype: int
     paramtype: vlogparam
     description: |
       Enables testbench JTAG DIPs. Admitted values: 1|0.
-    default: 0
-  X_EXT:
-    datatype: int
-    paramtype: vlogparam
-    description: |
-      Enables CORE-V-XIF interface for the CV32E40X and CV32E40PX cores. Admitted values: 1|0.
     default: 0
   USE_EXTERNAL_DEVICE_EXAMPLE:
     datatype: int
@@ -278,7 +260,6 @@ targets:
         - tool_modelsim? (pre_build_remote_bitbang)
         - tool_modelsim? (pre_patch_modelsim_Makefile) # this is required by Questa 2020 on
     parameters:
-    - COREV_PULP=0
     - use_jtag_dpi? (JTAG_DPI=1)
     - "!use_jtag_dpi? (JTAG_DPI=0)"
     tools:
@@ -324,6 +305,10 @@ targets:
           - '-LDFLAGS "-pthread -lutil -lelf"'
           - "-Wall"
           - "-Wno-UNDRIVEN"
+          - "-Wno-SYNCASYNCNET"
+          - "-Wno-UNUSEDSIGNAL"
+          - "-Wno-WIDTHTRUNC"
+          - "-Wno-WIDTHEXPAND"
 
   pynq-z2:
     <<: *default_target
@@ -335,9 +320,6 @@ targets:
     - xdc-fpga-pynq-z2
     - ext_bus
     parameters:
-    - COREV_PULP
-    - FPU
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -359,9 +341,6 @@ targets:
     - xdc-fpga-pynq-z1
     - ext_bus
     parameters:
-    - COREV_PULP
-    - FPU
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -380,9 +359,6 @@ targets:
     - xdc-fpga-zcu104
     - ext_bus
     parameters:
-    - COREV_PULP
-    - FPU
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true
@@ -404,9 +380,6 @@ targets:
     - xdc-fpga-zcu102
     - ext_bus
     parameters:
-    - COREV_PULP
-    - FPU
-    - X_EXT
     - SYNTHESIS=true
     - REMOVE_OBI_FIFO
     - FPGA_SYNTHESIS=true

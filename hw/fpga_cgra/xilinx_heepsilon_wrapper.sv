@@ -6,9 +6,6 @@ module xilinx_heepsilon_wrapper
   import obi_pkg::*;
   import reg_pkg::*;
 #(
-    parameter COREV_PULP    = 0,
-    parameter FPU           = 0,
-    parameter ZFINX    = 0,
     parameter CLK_LED_COUNT_LENGTH = 27
 ) (
 `ifdef FPGA_ZCU104
@@ -109,11 +106,7 @@ module xilinx_heepsilon_wrapper
   );
 `endif
 
-  heepsilon_top #(
-        .COREV_PULP (0),
-        .FPU        (0),
-        .ZFINX (0)
-      ) heepsilon_top_i (
+  heepsilon_top heepsilon_top_i (
         .clk_i(clk_gen),
         .rst_ni(rst_n),
         .boot_select_i,

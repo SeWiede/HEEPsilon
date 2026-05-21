@@ -120,8 +120,10 @@ endtask
 task load_flash_hex;
     input string firmware_file;
     int i;
+`ifndef VERILATOR
     for (i=0; i<=16*1024*1024; i=i+1)
         flash_boot_i.memory[i] = 8'h00;
     $readmemh(firmware_file, flash_boot_i.memory);
+`endif
 endtask
 `endif
