@@ -1,0 +1,19 @@
+CAPI=2:
+
+# Copyright 2022 EPFL
+# Solderpad Hardware License, Version 2.1, see LICENSE.md for details.
+# SPDX-License-Identifier: Apache-2.0 WITH SHL-2.1
+
+name: "::spiflash:0"
+description: SPI Flash Verilog model for simulation
+
+filesets:
+  rtl:
+    files:
+    - hw/vendor/esl_epfl_x_heep/tb/yosys_spiflash.sv
+    file_type: systemVerilogSource
+
+targets:
+  default:
+    filesets:
+    - rtl

@@ -14,6 +14,7 @@ export "DPI-C" task tb_writetoSram${bank.name()};
 % endfor
 export "DPI-C" task tb_getMemSize;
 export "DPI-C" task tb_set_exit_loop;
+export "DPI-C" task load_flash_hex;
 
 import core_v_mini_mcu_pkg::*;
 
@@ -114,5 +115,13 @@ task tb_set_exit_loop;
 `else
   heepsilon_top_i.x_heep_system_i.core_v_mini_mcu_i.ao_peripheral_subsystem_i.soc_ctrl_i.testbench_set_exit_loop[0] = 1'b1;
 `endif
+endtask
+
+task load_flash_hex;
+    input string firmware_file;
+    int i;
+    for (i=0; i<=16*1024*1024; i=i+1)
+        flash_boot_i.memory[i] = 8'h00;
+    $readmemh(firmware_file, flash_boot_i.memory);
 endtask
 `endif

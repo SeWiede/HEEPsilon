@@ -40,6 +40,7 @@ filesets:
   tb-harness:
     files:
     - tb/tb_util.svh: {is_include_file: true}
+    - tb/heepsilon_clock_config.svh: {is_include_file: true}
     - tb/testharness.sv
     file_type: systemVerilogSource
 
@@ -291,6 +292,7 @@ targets:
         vsim_options:
         - -sv_lib ../../../hw/vendor/esl_epfl_x_heep/hw/vendor/lowrisc_opentitan/hw/dv/dpi/uartdpi/uartdpi
         - -sv_lib ../../../hw/vendor/esl_epfl_x_heep/hw/vendor/pulp_platform_pulpissimo/rtl/tb/remote_bitbang/librbs
+        - -suppress vopt-7061
       vcs:
         vcs_options:
          - -override_timescale=1ns/1ps

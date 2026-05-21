@@ -81,21 +81,34 @@ with open("edalize_build_rtl.tcl","r") as f:
 # Fix the ocurrences of hw/hw/ inside the edalize_build_rtl.tcl file
 data = data.replace("/hw/hw/","/hw/")
 
-instance = "tb_top/testharness_i/heepsilon_top_i/cgra_top_wrapper_i"
+# Power analysis flow (VCD/SAIF dump) — DISABLED.
+#
+# The original flow appended vsim/vcd/saif commands to edalize_build_rtl.tcl
+# so that QuestaSim would run a short simulation during the BUILD step and
+# produce dump.vcd / dump.saif for power estimation.
+#
+# This is broken with the v1.04 cgra_rcs.sv: that file drives always_ff
+# variables from multiple processes, which triggers vopt-7061 (and ultimately
+# vopt-2064 backend failure) when vsim runs vopt during the build step.
+# The -suppress vopt-7061 vsim_option in heepsilon.core only suppresses the
+# warning during the normal simulation run, not during this embedded vopt call.
+#
+# To re-enable, fix cgra_rcs.sv so it has a single driver per always_ff
+# variable, then uncomment the block below.
+#
+# instance = "tb_top/testharness_i/heepsilon_top_i/cgra_top_wrapper_i"
+# data = data + "\n\nvsim -vcddump -r tb_top\n"
+# data = data + "vsim -saifdump dump.saif tb_top\n"
+# data = data + "vcd file dump.vcd\n"
+# data = data + "vcd add -inout "+instance+"\n"
+# data = data + "vcd off dump.vcd\n"
+# data = data + "run 2 ns\n"
+# data = data + "vcd on dump.vcd\n"
+# data = data + "run 5 ms\n"
+# data = data + "quit\n"
 
-data = data + "\n\nvsim -vcddump -r tb_top\n" 
-data = data + "vsim -saifdump dump.saif tb_top\n"		
-
-data = data + "vcd file dump.vcd\n"
-data = data + "vcd add -inout "+instance+"\n"
-data = data + "vcd off dump.vcd\n"
-data = data + "run 2 ns\n"
-data = data + "vcd on dump.vcd\n"
-data = data + "run 5 ms\n"
-data = data + "quit\n"
-
-with open("edalize_build_rtl.tcl","w") as f:		
-	f.write(data)	
+with open("edalize_build_rtl.tcl","w") as f:
+	f.write(data)
 	
 
 
