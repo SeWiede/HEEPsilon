@@ -18,7 +18,6 @@ PORT		?= /dev/ttyUSB2
 EXTERNAL_DOMAINS = 1
 PROJECT ?= hello_world
 
-MEMORY_BANKS ?= 6
 #MEMORY_BANKS_IL ?= 4 # Power of 2
   
 export HEEP_DIR = hw/vendor/esl_epfl_x_heep/
@@ -42,7 +41,10 @@ mcu-gen: heepsilon-gen
 	  EXTERNAL_DOMAINS=$(EXTERNAL_DOMAINS) \
 	  MEMORY_BANKS=$(MEMORY_BANKS) \
 	  EXTERNAL_MCU_GEN_TEMPLATES="$(CURDIR)/tb/tb_util.svh.tpl" \
-	  SOURCE=../../../sw/
+	  SOURCE=../../../sw/ \
+	  REGTOOL="$(CURDIR)/$(HEEP_DIR)hw/vendor/pulp_platform/register_interface/vendor/lowrisc_opentitan/util/regtool.py" \
+	  PERIPH_STRUCTS_GEN="$(CURDIR)/$(HEEP_DIR)util/periph_structs_gen/periph_structs_gen.py" \
+	  TEMPLATE_FILE="$(CURDIR)/$(HEEP_DIR)util/periph_structs_gen/periph_structs.tpl"
 
 ## Builds (synthesis and implementation) the bitstream for the FPGA version using Vivado
 ## @param FPGA_BOARD=nexys-a7-100t,pynq-z2,pynq-z1
