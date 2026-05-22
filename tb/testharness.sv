@@ -130,7 +130,7 @@ module testharness #(
   end
 
   uartdpi #(
-      .BAUD('d256000),
+      .BAUD(CLK_FREQUENCY * 1000 / 20),  // matches SW UART_BAUDRATE = REFERENCE_CLOCK_Hz/20
       .FREQ(CLK_FREQUENCY * 1000),  //Hz
       .NAME("uart0")
   ) i_uart0 (
