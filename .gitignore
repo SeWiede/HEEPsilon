@@ -12,6 +12,9 @@ build
 *.dis
 *.dump
 
+# per-application incremental SW build caches
+sw/builds/
+
 # ignore automatically generated files
 hw/rtl/heepsilon_pkg.sv
 tb/tb_util.svh

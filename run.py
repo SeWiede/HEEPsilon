@@ -103,6 +103,9 @@ DEFAULT_SIMULATOR = "verilator"
 def sim_log_dir(simulator: str = DEFAULT_SIMULATOR) -> Path:
     return SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0" / SIM_TARGETS[simulator]["log_dir"]
 
+def _sim_built(simulator: str) -> bool:
+    return sim_log_dir(simulator).is_dir()
+
 # ── Board configurations ──────────────────────────────────────────────────────
 
 DEFAULT_BOARD = "pynq-z2"
@@ -513,9 +516,14 @@ def run_sim_matrix(
     all_results: list[Result] = []
     for cfg in configs:
         header(f"\n  ── Config: {cfg.name}  ({cfg.description}) ──\n")
-        mcu_gen(opts.get("dry_run", False), conda_env, cfg,
-                memory_banks=opts.get("memory_banks", HEEPSILON_DEFAULT_MEMORY_BANKS))
-        build_sim(opts.get("dry_run", False), conda_env, simulator)
+        if opts.get("run_gen"):
+            mcu_gen(opts.get("dry_run", False), conda_env, cfg,
+                    memory_banks=opts.get("memory_banks", HEEPSILON_DEFAULT_MEMORY_BANKS))
+        if opts.get("run_build"):
+            build_sim(opts.get("dry_run", False), conda_env, simulator)
+        if not opts.get("dry_run") and not _sim_built(simulator):
+            err(f"Simulator not built ({SIM_TARGETS[simulator]['log_dir']}/ missing) — skipping config {cfg.name}")
+            continue
         for tc in tests:
             r = run_sim_test(
                 tc,
@@ -1296,10 +1304,10 @@ def build_parser() -> argparse.ArgumentParser:
               ./run.py --board zcu104 --tests cgra_alu_test        # FPGA run, auto-detect bitstream
               ./run.py --board zcu104 --tests hello_world --program  # FPGA, force flash
               ./run.py --board zcu104 --simulator questasim --tests cgra_fft  # FPGA+sim compare
-              ./run.py --simulator questasim --tests cgra_fft      # QuestaSim sim
-              ./run.py --skip-gen --skip-build                     # sim all, skip rebuild
-              ./run.py --all-configs --skip-build                  # matrix all configs
-              ./run.py --only-build --simulator questasim          # build QuestaSim model
+              ./run.py --simulator questasim --tests cgra_fft      # QuestaSim sim (no rebuild)
+              ./run.py --simulator verilator --tests cgra_fft --rebuild  # full rebuild then run
+              ./run.py --all-configs --rebuild                     # matrix: gen+build per config
+              ./run.py --only-build --simulator questasim          # build QuestaSim model only
         """),
     )
 
@@ -1315,11 +1323,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Also run auto-discovered X-HEEP apps (disabled by default)")
 
     build = p.add_argument_group("build control  [sim / both]")
-    build.add_argument("--skip-patches", action="store_true")
-    build.add_argument("--skip-gen",     action="store_true",
-                       help="Skip mcu-gen step")
-    build.add_argument("--skip-build",   action="store_true",
-                       help="Skip simulator build step")
+    build.add_argument("--patch",      action="store_true",
+                       help="Apply source patches before running tests")
+    build.add_argument("--gen",        action="store_true",
+                       help="Run mcu-gen before running tests")
+    build.add_argument("--build-sim",  action="store_true",
+                       help="Build simulator before running tests")
+    build.add_argument("--rebuild",    action="store_true",
+                       help="Shorthand for --patch --gen --build-sim")
     build.add_argument("--only-patches", action="store_true",
                        help="Apply patches only, then exit")
     build.add_argument("--only-gen",     action="store_true",
@@ -1488,9 +1499,14 @@ def main() -> None:
             write_json_report(results, json_report)
         sys.exit(0 if overall else 1)
 
+    rebuild     = args.rebuild
+    run_patches = args.patch     or rebuild
+    run_gen     = args.gen       or rebuild
+    run_build   = args.build_sim or rebuild
+
     # ── Sim target ──────────────────────────────────────────────────────────────
     if args.all_configs:
-        if not args.skip_patches:
+        if run_patches:
             ensure_python_deps(dry)
             apply_patches(dry)
         matrix_opts = {
@@ -1500,40 +1516,31 @@ def main() -> None:
             "save_logs":    save_logs,
             "repeat":       args.repeat,
             "fail_fast":    args.fail_fast,
-            "simulator":    sim,
             "memory_banks": args.memory_banks,
+            "run_gen":      run_gen,
+            "run_build":    run_build,
         }
-        if args.skip_gen and args.skip_build:
-            results = []
-            for c in BUILD_CONFIGS:
-                for tc in tests_to_run:
-                    r = run_sim_test(tc, config=c, conda_env=conda, simulator=sim, **{
-                        k: v for k, v in matrix_opts.items()
-                        if k not in ("fail_fast", "simulator")
-                    })
-                    results.append(r)
-                    if args.fail_fast and not r.passed:
-                        err("Stopping early (--fail-fast)")
-                        overall = print_summary(results)
-                        if json_report:
-                            write_json_report(results, json_report)
-                        sys.exit(0 if overall else 1)
-        else:
-            results = run_sim_matrix(tests_to_run, BUILD_CONFIGS,
-                                     opts=matrix_opts, conda_env=conda, simulator=sim)
+        results = run_sim_matrix(tests_to_run, BUILD_CONFIGS,
+                                 opts=matrix_opts, conda_env=conda, simulator=sim)
         overall = print_summary(results)
         if json_report:
             write_json_report(results, json_report)
         sys.exit(0 if overall else 1)
 
     # Single-config sim pipeline
-    if not args.skip_patches:
+    if run_patches:
         ensure_python_deps(dry)
         apply_patches(dry)
-    if not args.skip_gen:
+    if run_gen:
         mcu_gen(dry, conda, cfg, memory_banks=args.memory_banks)
-    if not args.skip_build:
+    if run_build:
         build_sim(dry, conda, sim)
+
+    if not dry and not _sim_built(sim):
+        sys.exit(
+            f"Simulator not built yet ({SIM_TARGETS[sim]['log_dir']}/ not found).\n"
+            f"Run:  ./run.py --simulator {sim} --build-sim"
+        )
 
     results = []
     for tc in tests_to_run:

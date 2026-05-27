@@ -531,14 +531,14 @@ if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
    foreach (SRC_MODULE ${MAINFILE} )
     add_custom_command(TARGET ${MAINFILE}.elf
                        PRE_LINK
-                       COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
-                       COMMENT "Invoking: C Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")   
+                       COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
+                       COMMENT "Invoking: C Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")
    endforeach()
   else() #main.cpp targets
   foreach (SRC_MODULE ${MAINFILE} )
     add_custom_command(TARGET ${MAINFILE}.elf
                        PRE_LINK
-                      COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
+                      COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
                       COMMENT "Invoking: CPP Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
     endforeach()
   endif()
@@ -546,7 +546,7 @@ elseif(${COMPILER} MATCHES "g\\+\\+.*$")
   foreach (SRC_MODULE ${MAINFILE} )
   add_custom_command(TARGET ${MAINFILE}.elf
                      PRE_LINK
-                    COMMAND ${CMAKE_OBJDUMP} -S ${ROOT_PROJECT}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
+                    COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
                     COMMENT "Invoking: G++ Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
   endforeach()
 endif()

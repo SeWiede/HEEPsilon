@@ -109,16 +109,119 @@ run-fpga-com:
 XHEEP_MAKE = $(HEEP_DIR)/external.mk
 include $(XHEEP_MAKE)
 
-# Add a dependency on the existing app target of XHEEP to create a link to the build folder
-app: link_build
+# ─── Per-application incremental SW build ─────────────────────────────────────
+# Each PROJECT gets its own CMake build tree under sw/builds/<PROJECT>/.
+# sw/build is a symlink that always points at the most recently built app, so
+# all downstream targets (run-verilator, run-fpga, …) still find main.hex at
+# sw/build/main.hex without any changes.
+#
+# cmake is only re-configured when build-affecting parameters actually change
+# (PROJECT, TARGET, LINKER, ARCH, COMPILER, …); object files are reused
+# otherwise. No X-HEEP vendored files are modified.
+#
+# Usage:
+#   make app PROJECT=cgra_func_test            # incremental build
+#   make app PROJECT=cgra_func_test LINKER=flash_load   # reconfigures, then builds
+#   make clean-app PROJECT=cgra_func_test      # wipe one app's cache
+#   make clean-app PROJECT=all                 # wipe all app caches
 
-clean-app: link_rm
+HEEP_SW_DIR         := $(CURDIR)/$(HEEP_DIR)sw
+SW_BUILDS_DIR       := $(CURDIR)/sw/builds
+APP_BUILD_DIR       := $(SW_BUILDS_DIR)/$(PROJECT)
 
+# SW build parameter defaults (mirrors X-HEEP Makefile defaults)
+LINKER              ?= on_chip
+ARCH                ?= rv32imc_zicsr
+COMPILER            ?= gcc
+COMPILER_PREFIX     ?= $(shell basename $$(ls $(RISCV_XHEEP)/bin/*gcc 2>/dev/null | head -1) | sed 's/elf-gcc$$//')
+LINK_FOLDER         ?= $(HEEP_SW_DIR)/linker
+COMPILER_FLAGS      ?=
+CLANG_LINKER_USE_LD ?= 0
+VERBOSE             ?= false
+
+# Stamp encodes all CMake-configuration parameters.
+# Written to <build>/.cmake_stamp after a successful configure; a mismatch
+# triggers cmake re-configure (incremental — no clean).
+_STAMP_KEY := P=$(PROJECT) T=$(TARGET) L=$(LINKER) A=$(ARCH) C=$(COMPILER) CP=$(COMPILER_PREFIX) LF=$(LINK_FOLDER) RX=$(RISCV_XHEEP)
+
+.PHONY: app clean-app link_build link_rm
+
+## Compile SW application — incremental, per-app build cache in sw/builds/
+## @param PROJECT=<app_name>            (default: hello_world)
+## @param LINKER=on_chip|flash_load|flash_exec  (default: on_chip)
+## @param COMPILER=gcc|clang            (default: gcc)
+## @param ARCH=<ISA string>             (default: rv32imc_zicsr)
+##
+## Requires env.sh variables to be exported before calling make:
+##   export PATH="$$HOME/tools/verilator/5.040/bin:$$PATH"
+##   export RISCV_XHEEP="$$HOME/tools/riscv/corev-2024.05.30"
+##   export RISCV="$$RISCV_XHEEP"
+##   export MODEL_TECH="$$HOME/tools/questa/2022.4_5/questasim/linux_x86_64"
+##   export PATH="$$MODEL_TECH:$$PATH"
+app:
+	@# Guard: RISCV_XHEEP must be set (exported from env.sh before calling make)
+	@if [ -z "$(RISCV_XHEEP)" ]; then \
+	    echo "[heepsilon] ERROR: RISCV_XHEEP is not set."; \
+	    echo "  Export it first (see env.sh / CLAUDE.md):"; \
+	    echo "  export RISCV_XHEEP=\$$HOME/tools/riscv/corev-2024.05.30"; \
+	    exit 1; \
+	fi
+	@mkdir -p $(APP_BUILD_DIR)
+	@# Re-configure only when parameters have changed or CMake cache is absent
+	@STAMP="$(APP_BUILD_DIR)/.cmake_stamp"; \
+	KEY='$(_STAMP_KEY)'; \
+	if [ ! -f "$$STAMP" ] || [ "$$(cat $$STAMP)" != "$$KEY" ]; then \
+	    echo "[heepsilon] cmake configure: $(PROJECT)  (linker=$(LINKER), arch=$(ARCH), target=$(TARGET))"; \
+	    env PATH="$(RISCV_XHEEP)/bin:$(PATH)" \
+	        RISCV_XHEEP="$(RISCV_XHEEP)" \
+	        RISCV="$(RISCV_XHEEP)" \
+	        COMPILER="$(COMPILER)" \
+	        COMPILER_PREFIX="$(COMPILER_PREFIX)" \
+	        ARCH="$(ARCH)" \
+	    cmake -G "Unix Makefiles" \
+	        -B "$(APP_BUILD_DIR)" \
+	        -S "$(HEEP_SW_DIR)" \
+	        -DCMAKE_TOOLCHAIN_FILE="$(HEEP_SW_DIR)/cmake/riscv.cmake" \
+	        -DROOT_PROJECT="$(HEEP_SW_DIR)/" \
+	        -DSOURCE_PATH="$(CURDIR)/sw/" \
+	        -DTARGET="$(TARGET)" \
+	        "-DPROJECT:STRING=$(PROJECT)" \
+	        "-DRISCV_XHEEP:STRING=$(RISCV_XHEEP)" \
+	        "-DLINK_FOLDER:STRING=$(LINK_FOLDER)" \
+	        "-DLINKER:STRING=$(LINKER)" \
+	        "-DCOMPILER:STRING=$(COMPILER)" \
+	        "-DCOMPILER_PREFIX:STRING=$(COMPILER_PREFIX)" \
+	        "-DCOMPILER_FLAGS:STRING=$(COMPILER_FLAGS)" \
+	        "-DCLANG_LINKER_USE_LD:BOOL=$(CLANG_LINKER_USE_LD)" \
+	        "-DVERBOSE:STRING=$(VERBOSE)" \
+	    && echo "$$KEY" > "$$STAMP" \
+	    || { echo "[heepsilon] cmake configure FAILED"; exit 1; }; \
+	else \
+	    echo "[heepsilon] cmake config unchanged, skipping re-configure"; \
+	fi
+	@echo "[heepsilon] building $(PROJECT)..."
+	@$(MAKE) -C $(APP_BUILD_DIR)
+	@# Keep sw/build pointing at this app's output (relative symlink)
+	@ln -sfn builds/$(PROJECT) $(CURDIR)/sw/build
+	@echo "[heepsilon] done  →  sw/build -> sw/builds/$(PROJECT)/"
+
+## Remove build cache for PROJECT (use PROJECT=all to wipe every app)
+clean-app:
+	@if [ "$(PROJECT)" = "all" ]; then \
+	    echo "[heepsilon] removing all per-app build caches (sw/builds/)..."; \
+	    rm -rf $(SW_BUILDS_DIR); \
+	else \
+	    echo "[heepsilon] removing build cache for $(PROJECT)..."; \
+	    rm -rf $(APP_BUILD_DIR); \
+	fi
+	@rm -f $(CURDIR)/sw/build
+
+# sw/build symlink is now managed exclusively by the app target
 link_build:
-	ln -sf ../hw/vendor/esl_epfl_x_heep/sw/build sw/build
+	@:
 
 link_rm:
-	rm sw/build
+	@rm -f $(CURDIR)/sw/build
 
 clean:
 	rm -rf build buildsim.log
