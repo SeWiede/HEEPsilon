@@ -37,7 +37,7 @@ HEEPSILON_CORE     = SCRIPT_DIR / "heepsilon.core"
 CONFIGS_DIR        = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/configs"
 HEEPSILON_APPS_DIR = SCRIPT_DIR / "sw/applications"
 XHEEP_APPS_DIR     = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/sw/applications"
-SW_BUILD           = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/sw/build"
+SW_BUILD           = SCRIPT_DIR / "sw/build"
 DEFAULT_CONDA      = "core-v-mini-mcu"
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
