@@ -36,6 +36,7 @@ SCRIPT_DIR         = Path(__file__).resolve().parent
 HEEPSILON_CORE     = SCRIPT_DIR / "heepsilon.core"
 CONFIGS_DIR        = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/configs"
 HEEPSILON_APPS_DIR = SCRIPT_DIR / "sw/applications"
+SATMAPIT_APPS_DIR  = SCRIPT_DIR / "sw/satmapit"
 XHEEP_APPS_DIR     = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/sw/applications"
 SW_BUILD           = SCRIPT_DIR / "sw/build"
 DEFAULT_CONDA      = "core-v-mini-mcu"
@@ -232,6 +233,12 @@ def _discover_tests() -> list[TestCase]:
             result.append(TestCase(path.name, r".", description="(heepsilon app)"))
             seen.add(path.name)
 
+    if SATMAPIT_APPS_DIR.exists():
+        for path in sorted(SATMAPIT_APPS_DIR.iterdir()):
+            if path.is_dir() and path.name not in seen:
+                result.append(TestCase(path.name, r".", description="(satmapit app)"))
+                seen.add(path.name)
+
     for path in sorted(XHEEP_APPS_DIR.iterdir()):
         if path.is_dir() and path.name not in seen:
             result.append(TestCase(path.name, r".",
@@ -402,7 +409,9 @@ def build_app(
     linker = "on_chip" if (board == "sim" or force_on_chip) else BOARD_CONFIG[board].get("linker", "on_chip")
     target = "sim" if board == "sim" else board
     header(f"Building {app}  (linker={linker}  target={target})")
-    r = run_cmd(["make", "app", f"PROJECT={app}", f"LINKER={linker}", f"TARGET={target}"],
+    app_dir = "satmapit" if (SATMAPIT_APPS_DIR / app).is_dir() else "applications"
+    r = run_cmd(["make", "app", f"PROJECT={app}", f"APP_DIR={app_dir}",
+                 f"LINKER={linker}", f"TARGET={target}"],
                 dry_run=dry_run)
     if not dry_run and r.returncode != 0:
         sys.exit(f"make app failed for {app}.")
@@ -443,8 +452,9 @@ def run_sim_test(
         if log_path.exists():
             log_path.unlink()
 
+        app_dir = "satmapit" if (SATMAPIT_APPS_DIR / tc.app).is_dir() else "applications"
         r = run_cmd(
-            ["make", run_target, f"PROJECT={tc.app}"],
+            ["make", run_target, f"PROJECT={tc.app}", f"APP_DIR={app_dir}"],
             conda_env=conda_env, dry_run=dry_run, timeout=timeout,
         )
 
@@ -1020,7 +1030,8 @@ def _sim_output_for(tc: TestCase, simulator: str = DEFAULT_SIMULATOR) -> str:
     if log_path.exists():
         log_path.unlink()
     run_target = SIM_TARGETS[simulator]["run_target"]
-    r = run_cmd(["make", run_target, f"PROJECT={tc.app}"])
+    app_dir = "satmapit" if (SATMAPIT_APPS_DIR / tc.app).is_dir() else "applications"
+    r = run_cmd(["make", run_target, f"PROJECT={tc.app}", f"APP_DIR={app_dir}"])
     if r.returncode != 0:
         err(f"Sim run failed for {tc.app} — skipping comparison")
         return ""
@@ -1091,19 +1102,6 @@ def _pick_tests(pool: list[TestCase]) -> list[TestCase]:
     indices = _multi_pick("Select tests to run (Enter = all):", labels)
     return [pool[i] for i in indices]
 
-def _gather_sim_opts() -> dict:
-    opts: dict = {}
-    opts["simulator"]    = _pick_simulator()
-    opts["memory_banks"] = _ask_int("MEMORY_BANKS (must match bitstream)", default=HEEPSILON_DEFAULT_MEMORY_BANKS) or HEEPSILON_DEFAULT_MEMORY_BANKS
-    opts["verbose"]      = _ask_bool("Verbose output (print uart0.log)?")
-    opts["dry_run"]      = _ask_bool("Dry run (print commands, don't execute)?")
-    opts["timeout"]      = _ask_int("Per-test timeout in seconds (blank = none)")
-    opts["repeat"]       = _ask_int("Repeat each test N times (flaky detection)", default=1)
-    raw = input("Save logs to directory? (blank = skip): ").strip()
-    opts["save_logs"] = Path(raw) if raw else None
-    raw = input("Write JSON report to file? (blank = skip): ").strip()
-    opts["json_report"] = Path(raw) if raw else None
-    return opts
 
 def _gather_fpga_opts() -> dict:
     opts: dict = {}
@@ -1143,25 +1141,30 @@ def _interactive_sim() -> None:
     enabled  = [t for t in TESTS if t.enabled]
     disabled = [t for t in TESTS if not t.enabled]
 
-    SIM_MENU = [
-        "Full CI        — patches + mcu-gen + build + all enabled tests",
-        "Full CI matrix — same, across multiple configs",
-        "Selected tests — patches + mcu-gen + build + chosen tests",
-        "Re-run only    — skip mcu-gen and build (sim already built)",
+    sim   = _pick_simulator()
+    built = _sim_built(sim)
+    print(f"\n  Simulator: {_c(BOLD, sim)}  "
+          f"[{_c(GREEN, '✓ built') if built else _c(YELLOW, '✗ not built')}]")
+    if not built:
+        print(f"  {_c(YELLOW, '  → choose option 2 or 3 to build first')}")
+
+    choice = _pick("Sim — what would you like to do?", [
+        "Run tests only    — use existing build",
+        "Build + run       — (re)build simulator, then run tests",
+        "Full rebuild + run — patches + mcu-gen + build-sim + run tests",
+        "CI matrix         — full rebuild across all configs",
         "mcu-gen only",
         "Build simulator only",
-        "Apply source patches only",
+        "Apply patches only",
         "List available tests",
         "Back",
-    ]
+    ])
 
-    choice = _pick("Sim — what would you like to do?", SIM_MENU)
-
-    if choice == 8:
+    if choice == 8:  # Back
         interactive_mode()
         return
 
-    if choice == 7:
+    if choice == 7:  # List tests
         print()
         header("Enabled tests:")
         for t in enabled:
@@ -1173,65 +1176,92 @@ def _interactive_sim() -> None:
         _interactive_sim()
         return
 
-    if choice == 4:   # mcu-gen only
-        dry_run = _ask_bool("Dry run?")
-        cfg = _pick_config()
-        mb = _ask_int("MEMORY_BANKS", default=HEEPSILON_DEFAULT_MEMORY_BANKS) or HEEPSILON_DEFAULT_MEMORY_BANKS
-        ensure_python_deps(dry_run)
-        apply_patches(dry_run)
-        mcu_gen(dry_run, config=cfg, memory_banks=mb)
-        return
-    if choice == 5:   # build sim only
-        dry_run = _ask_bool("Dry run?")
-        sim = _pick_simulator()
-        build_sim(dry_run, simulator=sim)
-        return
-    if choice == 6:   # patches only
+    if choice == 6:  # Apply patches only
         apply_patches(_ask_bool("Dry run?"))
         return
 
-    if choice == 1:   # Full CI matrix
-        configs = _pick_configs()
-        opts    = _gather_sim_opts()
-        opts["fail_fast"] = _ask_bool("Stop matrix on first failure?")
-        ensure_python_deps(opts["dry_run"])
-        apply_patches(opts["dry_run"])
-        results = run_sim_matrix(enabled, configs, opts=opts, simulator=opts["simulator"])
-        overall = print_summary(results)
-        if opts["json_report"]:
-            write_json_report(results, opts["json_report"])
-        sys.exit(0 if overall else 1)
+    if choice == 5:  # Build simulator only
+        build_sim(_ask_bool("Dry run?"), simulator=sim)
+        return
 
-    cfg = _pick_config()
-    tests_to_run = _pick_tests(enabled) if choice in (2, 3) else enabled
-    opts = _gather_sim_opts()
+    if choice == 4:  # mcu-gen only
+        dry = _ask_bool("Dry run?")
+        cfg = _pick_config()
+        mb  = _ask_int("MEMORY_BANKS", default=HEEPSILON_DEFAULT_MEMORY_BANKS) or HEEPSILON_DEFAULT_MEMORY_BANKS
+        ensure_python_deps(dry)
+        apply_patches(dry)
+        mcu_gen(dry, config=cfg, memory_banks=mb)
+        return
 
-    if choice in (0, 2):
-        ensure_python_deps(opts["dry_run"])
-        apply_patches(opts["dry_run"])
-        mcu_gen(opts["dry_run"], config=cfg,
-                memory_banks=opts.get("memory_banks", HEEPSILON_DEFAULT_MEMORY_BANKS))
-        build_sim(opts["dry_run"], simulator=opts["simulator"])
-    # choice == 3 (Re-run only) — skip build
+    # choices 0-3: run tests (with varying build steps)
+    run_patches = choice in (2, 3)
+    run_gen     = choice in (2, 3)
+    run_build   = choice in (1, 2, 3)
+
+    if choice == 0 and not built:
+        print(_c(YELLOW, f"\n  ! {sim} simulator not built — tests will likely fail."))
+        if not _ask_bool("Continue anyway?"):
+            _interactive_sim()
+            return
+
+    if choice == 3:  # CI matrix
+        configs      = _pick_configs()
+        tests_to_run = _pick_tests(enabled)
+        dry          = _ask_bool("Dry run?")
+        verbose      = _ask_bool("Verbose output?")
+        timeout      = _ask_int("Per-test timeout in seconds (blank = none)")
+        fail_fast    = _ask_bool("Stop on first failure?")
+        if run_patches:
+            ensure_python_deps(dry)
+            apply_patches(dry)
+        results = run_sim_matrix(
+            tests_to_run, configs,
+            opts={
+                "dry_run":      dry,
+                "verbose":      verbose,
+                "timeout":      timeout,
+                "save_logs":    None,
+                "repeat":       1,
+                "fail_fast":    fail_fast,
+                "memory_banks": HEEPSILON_DEFAULT_MEMORY_BANKS,
+                "run_gen":      run_gen,
+                "run_build":    run_build,
+            },
+            simulator=sim,
+        )
+        print_summary(results)
+        return
+
+    cfg          = _pick_config()
+    tests_to_run = _pick_tests(enabled)
+    dry          = _ask_bool("Dry run?")
+    verbose      = _ask_bool("Verbose output?")
+    timeout      = _ask_int("Per-test timeout in seconds (blank = none)")
+
+    if run_patches:
+        ensure_python_deps(dry)
+        apply_patches(dry)
+    if run_gen:
+        mcu_gen(dry, config=cfg, memory_banks=HEEPSILON_DEFAULT_MEMORY_BANKS)
+    if run_build:
+        build_sim(dry, simulator=sim)
 
     results = []
     for tc in tests_to_run:
         r = run_sim_test(
             tc,
-            verbose   = opts["verbose"],
-            dry_run   = opts["dry_run"],
-            timeout   = opts["timeout"],
-            save_logs = opts["save_logs"],
-            repeat    = opts["repeat"] or 1,
+            verbose   = verbose,
+            dry_run   = dry,
+            timeout   = timeout,
+            save_logs = None,
+            conda_env = DEFAULT_CONDA,
+            repeat    = 1,
             config    = cfg,
-            simulator = opts["simulator"],
+            simulator = sim,
         )
         results.append(r)
 
-    overall = print_summary(results)
-    if opts["json_report"]:
-        write_json_report(results, opts["json_report"])
-    sys.exit(0 if overall else 1)
+    print_summary(results)
 
 def _interactive_fpga() -> None:
     enabled      = [t for t in TESTS if t.enabled]
@@ -1441,10 +1471,25 @@ def main() -> None:
         build_sim(dry, conda, sim)
         return
 
-    has_action = board_explicit or simulator_explicit
-    if not has_action:
+    has_action = (
+        board_explicit or simulator_explicit
+        or args.all_configs
+        or args.rebuild or args.patch or args.gen or args.build_sim
+    )
+    if not has_action and not args.tests:
         interactive_mode(preset_target=target if target_explicit else None)
         return
+
+    if not has_action and args.tests:
+        # --tests alone: only ask sim/fpga/both, then run non-interactively
+        target_idx = _pick("Select target:", [
+            "sim   — compile + simulate, validate UART output",
+            "fpga  — compile + program board, capture UART",
+            "both  — fpga run, then sim run, then compare outputs",
+        ])
+        target = ["sim", "fpga", "both"][target_idx]
+        if target in ("sim", "both") and not simulator_explicit:
+            sim = _pick_simulator()
 
     # ── Resolve test list ───────────────────────────────────────────────────────
     if args.tests:
