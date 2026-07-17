@@ -14,8 +14,9 @@ Key source files: `cgra_pkg.sv`, `datapath.sv`, `alu.sv`, `cgra_rcs.sv`,
 The CGRA is a 2-D array of **N_ROWS × N_COL** Reconfigurable Cells (RCs).
 Default configuration (HEEPsilon): **4 rows × 4 columns**.
 
-- All columns execute in **lock-step SIMD**: every column in an active row
-  executes the same instruction word at the same PC.
+- All columns advance the **same logical PC** in lock-step (same stall behavior,
+  same number of steps K), but each column reads from a different physical IMEM
+  offset: `start_addr + col*K + pc`. Every RC has its own independent instruction.
 - Each column has its own **read pointer** and **write pointer** (set by the
   CPU before launching a kernel) and its own register file.
 - Columns are connected in a **torus mesh**: each cell can read the result of
@@ -188,8 +189,9 @@ The CGRA context memory is a flat array of `CGRA_CMEM_BK_DEPTH * CGRA_N_ROWS`
 instruction for row `r` at PC `p` (relative to kernel start) is at index
 `r*128 + start_addr + p`.
 
-All columns in a row execute the same instruction at each PC — the CGRA is
-**column-SIMD** (not row-SIMD). Each row provides a different pipeline stage.
+Every RC (row × column) has its own instruction at each PC. All 4×4 = 16 RCs
+execute independently and simultaneously. The only shared thing is the logical
+PC counter — all active columns advance it together.
 
 ---
 
