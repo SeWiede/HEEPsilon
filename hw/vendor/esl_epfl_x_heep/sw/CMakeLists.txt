@@ -44,6 +44,12 @@ endif()
 # set the project name
 project(${PROJECT} ASM C CXX)
 
+# Application source sub-directory (relative to SOURCE_PATH).
+# Override with -DAPP_DIR=satmapit to build from sw/satmapit/.
+if(NOT DEFINED APP_DIR)
+  set(APP_DIR "applications")
+endif()
+
 # environment check
 if(DEFINED ENV{RISCV_XHEEP})
   set(RISCV_XHEEP "$ENV{RISCV_XHEEP}")
@@ -78,7 +84,7 @@ FOREACH(file_path ${new_list})
     else()
       SET(add 1)
     endif()
-  elseif(${file_path} MATCHES ${SOURCE_PATH}applications/${PROJECT}/)
+  elseif(${file_path} MATCHES ${SOURCE_PATH}${APP_DIR}/${PROJECT}/)
     SET(add 1)
   elseif( ( ${file_path} MATCHES "${SOURCE_PATH}freertos/" ) AND ( ${PROJECT} MATCHES "freertos" ) )
     SET(add 1)
@@ -145,9 +151,9 @@ FOREACH(file_path IN LISTS new_list)
     endif()
   elseif( (${file_path} MATCHES "${SOURCE_PATH}external/") AND ( NOT  ${file_path} MATCHES "exclude" ) )
     SET(add 1)
-  elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}\\." ) # look for main.*
+  elseif( ${file_path} MATCHES "${SOURCE_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}\\." ) # look for main.*
     SET(app_found 1)
-  elseif( ${file_path} MATCHES "${SOURCE_PATH}applications/${PROJECT}/" ) # other sources
+  elseif( ${file_path} MATCHES "${SOURCE_PATH}${APP_DIR}/${PROJECT}/" ) # other sources
     SET(add 1)
   endif()
 
@@ -182,7 +188,7 @@ if( app_found EQUAL 0 )
       if(NOT ${file_path} MATCHES ".*/crt/.*")
         SET(add 1)
       endif()
-    elseif( ( ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/" ) AND ( NOT ${file_path} MATCHES "${ROOT_PROJECT}applications/${PROJECT}/${MAINFILE}\\." ) AND ( NOT  ${file_path} MATCHES "exclude" ) )
+    elseif( ( ${file_path} MATCHES "${ROOT_PROJECT}${APP_DIR}/${PROJECT}/" ) AND ( NOT ${file_path} MATCHES "${ROOT_PROJECT}${APP_DIR}/${PROJECT}/${MAINFILE}\\." ) AND ( NOT  ${file_path} MATCHES "exclude" ) )
       SET(add 1)
     endif()
 
@@ -397,14 +403,14 @@ endif()
 #      SET TARGETS
 #######################################################################
 if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
-  set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
+  set(SOURCES ${SOURCE_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}.c)
   if(NOT EXISTS ${SOURCES})
     # If main.c does not exist, set the source file to main.cpp
-    set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.cpp)
+    set(SOURCES ${SOURCE_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}.cpp)
     message("${Red}cpp SOURCES set")
   endif()
 elseif(${COMPILER} MATCHES "g\\+\\+.*$")
-  set(SOURCES ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.cpp)
+  set(SOURCES ${SOURCE_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}.cpp)
 endif()
 
 # add the executable
@@ -487,13 +493,13 @@ if (${COMPILER} MATCHES "clang")
   set(CLANG_LINKER_EXE "ld.lld")
 	if( ${PROJECT} MATCHES "freertos" )
 		set( CMAKE_C_LINK_EXECUTABLE "${CLANG_LINKER_EXE} ${CMAKE_EXE_LINKER_FLAGS} \
-                                ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${MAINFILE}.c.obj \
+                                ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}.c.obj \
                                 -o ${MAINFILE}.elf \
 								_deps/freertos_kernel-build/libfreertos_kernel.a \ _deps/freertos_kernel-build/portable/libfreertos_kernel_port.a \ _deps/freertos_kernel-build/libfreertos_kernel.a \ _deps/freertos_kernel-build/portable/libfreertos_kernel_port.a \
 								")
 	else()
     set( CMAKE_C_LINK_EXECUTABLE "${CLANG_LINKER_EXE} ${CMAKE_EXE_LINKER_FLAGS} \
-                                ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${MAINFILE}.c.obj \
+                                ${SOURCE_PATH}build/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}.c.obj \
                                 -o ${MAINFILE}.elf")
     endif()
 endif()
@@ -527,18 +533,18 @@ add_custom_command(TARGET ${MAINFILE}.elf POST_BUILD
 
 # Pre-processing command to create disassembly for each source file
 if ((${COMPILER} MATCHES "gcc") OR (${COMPILER} MATCHES "clang"))
-  if(EXISTS ${SOURCE_PATH}applications/${PROJECT}/${MAINFILE}.c)
+  if(EXISTS ${SOURCE_PATH}${APP_DIR}/${PROJECT}/${MAINFILE}.c)
    foreach (SRC_MODULE ${MAINFILE} )
     add_custom_command(TARGET ${MAINFILE}.elf
                        PRE_LINK
-                       COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
+                       COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}${APP_DIR}/${PROJECT}/${SRC_MODULE}.c.obj > ${SRC_MODULE}.s
                        COMMENT "Invoking: C Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.c.obj)")
    endforeach()
   else() #main.cpp targets
   foreach (SRC_MODULE ${MAINFILE} )
     add_custom_command(TARGET ${MAINFILE}.elf
                        PRE_LINK
-                      COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
+                      COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}${APP_DIR}/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
                       COMMENT "Invoking: CPP Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
     endforeach()
   endif()
@@ -546,7 +552,7 @@ elseif(${COMPILER} MATCHES "g\\+\\+.*$")
   foreach (SRC_MODULE ${MAINFILE} )
   add_custom_command(TARGET ${MAINFILE}.elf
                      PRE_LINK
-                    COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}applications/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
+                    COMMAND ${CMAKE_OBJDUMP} -S ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${MAINFILE}.elf.dir/${OBJ_PATH}${APP_DIR}/${PROJECT}/${SRC_MODULE}.cpp.obj > ${SRC_MODULE}.s
                     COMMENT "Invoking: G++ Disassemble ( CMakeFiles/${MAINFILE}.dir/${SRC_MODULE}.cpp.obj)")
   endforeach()
 endif()
