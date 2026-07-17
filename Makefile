@@ -142,7 +142,8 @@ VERBOSE             ?= false
 # Stamp encodes all CMake-configuration parameters.
 # Written to <build>/.cmake_stamp after a successful configure; a mismatch
 # triggers cmake re-configure (incremental — no clean).
-_STAMP_KEY := P=$(PROJECT) T=$(TARGET) L=$(LINKER) A=$(ARCH) C=$(COMPILER) CP=$(COMPILER_PREFIX) LF=$(LINK_FOLDER) RX=$(RISCV_XHEEP)
+APP_DIR             ?= applications
+_STAMP_KEY := P=$(PROJECT) T=$(TARGET) L=$(LINKER) A=$(ARCH) C=$(COMPILER) CP=$(COMPILER_PREFIX) LF=$(LINK_FOLDER) RX=$(RISCV_XHEEP) AD=$(APP_DIR)
 
 .PHONY: app clean-app link_build link_rm
 
@@ -184,6 +185,7 @@ app:
 	        -DCMAKE_TOOLCHAIN_FILE="$(HEEP_SW_DIR)/cmake/riscv.cmake" \
 	        -DROOT_PROJECT="$(HEEP_SW_DIR)/" \
 	        -DSOURCE_PATH="$(CURDIR)/sw/" \
+        "-DAPP_DIR:STRING=$(APP_DIR)" \
 	        -DTARGET="$(TARGET)" \
 	        "-DPROJECT:STRING=$(PROJECT)" \
 	        "-DRISCV_XHEEP:STRING=$(RISCV_XHEEP)" \
