@@ -40,6 +40,16 @@ RCS_NUM_CREG_LOG2       = int(ceil(log(32,  2)))    # 5
 CGRA_KMEM_WIDTH         = CGRA_MAX_COL + CGRA_CMEM_BK_DEPTH_LOG2 + RCS_NUM_CREG_LOG2  # 16
 CGRA_CMEM_TOT_DEPTH     = CGRA_N_ROW * CGRA_CMEM_BK_DEPTH                              # 512
 
+# ─── Benchmarking sweep configuration ────────────────────────────────────────
+# See docs/cgra_kernel_toolchain.md and TODO_satmapit_toolchain.md §2.1.
+_SWEEP_MEM_BUDGET_BYTES = 8 * 1024   # on-chip bytes to spend on sweep buffers
+_SWEEP_MAX_N_CAP        = 1024       # hard cap on the largest swept N
+_SWEEP_TRIALS           = 30         # repetitions for scalar/fixed-schedule kernels
+_SWEEP_RAND_SEED        = 12345
+_SWEEP_SCALAR_RAND_MASK = 0x7FFF     # default random-input range for scalar sweeps (0..32767)
+_SWEEP_DATA_RAND_MOD    = 2001       # data-element random range: [-1000, 1000]
+_SWEEP_DATA_RAND_BIAS   = 1000
+
 # ─── Encoding helpers ─────────────────────────────────────────────────────────
 def get_bin(x, n=0):
     return format(x, 'b').zfill(n)
@@ -328,6 +338,28 @@ def gen_io_comment(layout):
     return "\n".join(lines) + "\n"
 
 
+def gen_io_role_report(layout):
+    """One entry per active column describing its auto-inferred role (data
+    array / scalar input / write output / SWI) — the I/O auto-inference that
+    buffer sizing, fill patterns, and reference-arg mapping all depend on.
+    Independent of ref_info; this is purely from the CMEM scan."""
+    entries = []
+    for col in sorted(layout):
+        v = layout[col]
+        roles = []
+        if v.get('has_swi'):
+            roles.append("SWI output (sequential-write assumed)")
+        elif v['read_kernel'] > 0:
+            roles.append(f"data (array, {v['read_kernel']} read(s)/iter)")
+        elif v['reads']:
+            roles.append("scalar input")
+        if v['writes'] and not v.get('has_swi'):
+            roles.append("write output")
+        if roles:
+            entries.append(f"col{col}=[{' + '.join(roles)}]")
+    return entries
+
+
 def _buf_size_expr(col_info, io):
     """Compute buffer size expression for read ('in'), write ('out'), or SWI output ('swi_out').
 
@@ -392,6 +424,26 @@ def _buf_size_expr(col_info, io):
             return str(total) if total > 0 else "1"
 
 
+def _buf_size_value(col_info, io, n):
+    """Numeric analogue of _buf_size_expr for a concrete candidate N (used to
+    plan the sweep's memory footprint at generation time)."""
+    if io == 'in':
+        rk, ri = col_info['read_kernel'], col_info['read_init']
+        rp, re_ = col_info['read_prolog'], col_info['read_epilog']
+        if rk > 0:
+            return n * rk + ri + rp + re_
+        return max(ri + rp + re_, 1)
+    elif io == 'swi_out':
+        wk, we = col_info['swi_write_kernel'], col_info['swi_write_epilog']
+        return n * wk + we if wk > 0 else max(we, 1)
+    else:  # 'out'
+        wk = col_info.get('write_kernel', 0)
+        we, wf = col_info.get('write_epilog', 0), col_info['write_fini']
+        if wk > 0:
+            return n * wk + we + wf
+        return max(we + wf, 1)
+
+
 def gen_io_buffers(layout):
     """Return C buffer declarations for each col with LWD or SWD."""
     if not layout:
@@ -440,6 +492,521 @@ def gen_ptr_setup(layout):
                 f"  /* col {col} write */"
             )
     return "\n".join(lines)
+
+
+# ─── Benchmarking sweep (TODO_satmapit_toolchain.md §2.1) ────────────────────
+#
+# Two kinds of sweep, chosen from infer_io_layout()'s per-column metadata:
+#
+#   'loop_bound' — the kernel has a data col (LWD inside the kernel section,
+#                  i.e. read_kernel > 0), which cgra_gen.py already treats as
+#                  loading a runtime "N" as the first init-section word (see
+#                  gen_test_harness's "N prefix" convention). Sweep N itself,
+#                  doubling, reusing buffers sized for the largest N.
+#
+#   'scalar'     — no data col (fixed-schedule kernel, e.g. isqrt32): there is
+#                  no "N" to sweep, so instead repeat the run across a range
+#                  of randomized scalar input values.
+#
+# Only kernels that already auto-generate a real PASS/FAIL comparison (single
+# scalar return value, no SWI) are swept; complex/manual cases are unchanged.
+
+_RNG_BLOCK = f'''\
+/* ── Deterministic RNG (tausworthe combo, mirrors kernel_test's kcom_getRand) ── */
+#define SWEEP_RAND_SEED  {_SWEEP_RAND_SEED}u
+static uint32_t _rz1 = SWEEP_RAND_SEED, _rz2 = SWEEP_RAND_SEED,
+                _rz3 = SWEEP_RAND_SEED, _rz4 = SWEEP_RAND_SEED;
+
+static uint32_t sweep_rand(void) {{
+    uint32_t b;
+    b = ((_rz1 << 6)  ^ _rz1) >> 13;  _rz1 = ((_rz1 & 4294967294U) << 18) ^ b;
+    b = ((_rz2 << 2)  ^ _rz2) >> 27;  _rz2 = ((_rz2 & 4294967288U) << 2)  ^ b;
+    b = ((_rz3 << 13) ^ _rz3) >> 21;  _rz3 = ((_rz3 & 4294967280U) << 7)  ^ b;
+    b = ((_rz4 << 3)  ^ _rz4) >> 12;  _rz4 = ((_rz4 & 4294967168U) << 13) ^ b;
+    return (_rz1 ^ _rz2 ^ _rz3 ^ _rz4);
+}}
+'''
+
+
+def _verify_path_status(layout, ref_info):
+    """Classify which verification path this kernel takes and, if it's not the
+    sweep-eligible one, why — feeds both gen_sweep_section()'s eligibility gate
+    and the end-of-run report. Mirrors the branch dispatch in gen_test_harness().
+
+    Returns None if eligible for the sweep (single scalar return, SWD write,
+    no SWI, real ref function). Otherwise returns (tag, message) where tag is
+    'notes' (auto-verified, just not swept) or 'todo' (needs manual review/work).
+    """
+    if not ref_info or not ref_info.get('func_name'):
+        # Caller (main()) already reports this precisely (no --ref-src vs. no pragma found).
+        return ('skip', None)
+    fname = ref_info['func_name']
+    ret   = ref_info.get('return_type', 'int32_t').strip()
+    swi_cols   = [c for c, v in layout.items() if v.get('has_swi')]
+    write_cols = [c for c, v in layout.items() if v['writes'] and not v.get('has_swi')]
+
+    if swi_cols and not write_cols:
+        if ret in ('void', ''):
+            return ('todo', f"{fname}_ref() is void with SWI output — auto-comparison isn't "
+                            f"possible (in-place mutation over a delay-tapped stream); "
+                            f"main.c prints raw output only, compare by hand.")
+        return ('notes', f"{fname}_ref() is verified once against SWI output col{swi_cols[0]} "
+                         f"(single fixed-input run — SWI kernels aren't swept yet).")
+    if not write_cols:
+        return ('todo', "No SWD/SWI write column detected at all — verify output manually.")
+    if ret in ('void', ''):
+        data_cols = [c for c, v in layout.items() if v['read_kernel'] > 0]
+        is_simple = all(layout[c]['read_kernel'] <= 1 for c in data_cols)
+        if is_simple:
+            return ('notes', f"{fname}_ref() is void (array-mutating) — auto-verified once "
+                             f"against col{write_cols[0]}_out[] (single fixed-input run — "
+                             f"void-return kernels aren't swept yet).")
+        return ('todo', f"{fname}_ref() is void with multiple LWDs per data col (complex "
+                        f"fan-out, e.g. SHA-style) — auto-comparison not possible; write a "
+                        f"verify.h by hand (see sw/satmapit/cgra_sha/verify.h for an example).")
+    return None
+
+
+def plan_loop_bound_sweep(layout, min_n, explicit_range=None):
+    """Return a doubling list of N values.
+
+    Default: auto-sized to fit _SWEEP_MEM_BUDGET_BYTES, starting from the
+    smallest power of two >= min_n.  If explicit_range=(lo, hi) is given
+    (from --sweep-range), that range is used instead — the caller is
+    responsible for deciding whether it makes sense (e.g. it may exceed the
+    memory budget, or ignore the kernel's structural min_n).
+    """
+    if explicit_range is not None:
+        lo, hi = explicit_range
+        if lo < min_n:
+            print(f"  WARNING: --sweep-range start ({lo}) is below this kernel's "
+                  f"structural minimum N ({min_n}) — the low end of the sweep may fail.")
+        values, n = [], lo
+        while n <= hi:
+            values.append(n)
+            n *= 2
+        return values or [lo]
+
+    start = 4
+    while start < min_n:
+        start *= 2
+
+    def total_bytes(n):
+        total = 0
+        for v in layout.values():
+            if v['reads']:
+                total += _buf_size_value(v, 'in', n)
+            if v['writes'] and not v.get('has_swi'):
+                total += _buf_size_value(v, 'out', n)
+        return total * 4
+
+    candidate = _SWEEP_MAX_N_CAP
+    while candidate > start and total_bytes(candidate) > _SWEEP_MEM_BUDGET_BYTES:
+        candidate //= 2
+    candidate = max(candidate, start)
+
+    values, n = [], start
+    while n <= candidate:
+        values.append(n)
+        n *= 2
+    return values or [start]
+
+
+def _size_param_candidates(params):
+    """Indices of non-pointer int/unsigned/size_t parameters — candidates for
+    "the" runtime size argument. There's no way to tell from the type alone
+    which one is really the loop bound if more than one qualifies (e.g.
+    `ReverseBits(unsigned index, unsigned NumBits)` — index is data, NumBits
+    is the count, both look identical to this check)."""
+    return [i for i, (pt, _) in enumerate(params)
+            if '*' not in pt and pt.strip() in ('int', 'unsigned', 'size_t')]
+
+
+def _build_ref_args(params, data_cols, layout, scalar_cols, n_expr, extra_decls,
+                     size_param_idx=None, ambiguous_size=False, report=None):
+    """Build C argument expressions for the reference-function call.
+
+    Mirrors the pointer/int/scalar heuristic in gen_test_harness(), generalized to:
+      - consume scalar cols in order (not just the first) so multiple scalar
+        inputs each get their own column, and
+      - when a pointer param has no data col to source from, fall back to the
+        address of a local copy of a scalar col's value (needed for kernels
+        like isqrt32 whose only parameter is `uint32_t *in_ptr` over what is,
+        in stream terms, a single scalar input).
+
+    size_param_idx: index of the ONE parameter that gets n_expr (the chosen
+    size argument — see _size_param_candidates). Other int/unsigned/size_t
+    params are NOT assumed to also be the size; they're treated like any
+    other scalar parameter instead.
+    report: optional {'notes': [...], 'todo': [...]} — records which column
+    (if any) each parameter was mapped to, so a wrong guess is visible instead
+    of silent.
+
+    Returns (ref_args, consumed_scalar_count).
+    """
+    data_col = data_cols[0] if data_cols else None
+    sc_idx = [0]
+
+    def next_scalar():
+        if sc_idx[0] < len(scalar_cols):
+            sc = scalar_cols[sc_idx[0]]
+            sc_idx[0] += 1
+            # The real value lives in the *last* read slot — earlier slots
+            # (if any) are required-but-unused pad reads, same convention
+            # as the non-swept harness's col_in[n_sc_ref - 1].
+            n_sc = max(layout[sc]['read_init'] + layout[sc]['read_prolog'], 1)
+            return sc, f"col{sc}_in[{n_sc - 1}]"
+        return None, None
+
+    def note(i, ptype, pname, dest):
+        if report is not None:
+            report['notes'].append(f"param '{pname}' (arg {i}, {ptype}) -> {dest}")
+
+    def todo(i, ptype, pname, msg):
+        if report is not None:
+            report['todo'].append(f"param '{pname}' (arg {i}, {ptype}): {msg}")
+
+    ref_args = []
+    for i, (ptype, pname) in enumerate(params):
+        if '*' in ptype:
+            if data_col is not None:
+                n_init = layout[data_col]['read_init']
+                base = f"col{data_col}_in + {n_init}" if n_init else f"col{data_col}_in"
+                base_type = ptype.strip().rstrip('*').strip().lstrip('const').strip()
+                if base_type not in ('int32_t', 'uint32_t', 'int', 'unsigned int', 'unsigned'):
+                    base = f"({ptype}){base}"
+                ref_args.append(base)
+                note(i, ptype, pname, f"col{data_col} (data column)")
+            else:
+                sc, sc_expr = next_scalar()
+                if sc_expr is not None:
+                    pointee = ptype.strip().rstrip('*').strip()
+                    var = f"_arg{i}"
+                    extra_decls.append(f"        {pointee} {var} = ({pointee})({sc_expr});")
+                    ref_args.append(f"&{var}")
+                    note(i, ptype, pname, f"address of col{sc}_in[] (scalar column, taken by pointer)")
+                else:
+                    ref_args.append("NULL  /* TODO: no source column, fix by hand */")
+                    todo(i, ptype, pname, "no data col or spare scalar col to source it from — "
+                                          "generated call passes NULL, fix by hand.")
+        elif i == size_param_idx:
+            if ambiguous_size:
+                ref_args.append(f"{n_expr}  /* TODO: verify size param guess */")
+            else:
+                ref_args.append(n_expr)
+            note(i, ptype, pname, n_expr)
+        else:
+            sc, sc_expr = next_scalar()
+            if sc_expr is not None:
+                ref_args.append(sc_expr)
+                note(i, ptype, pname, f"col{sc}_in[] (scalar column)")
+            else:
+                ref_args.append("0  /* TODO: no scalar column available, verify */")
+                todo(i, ptype, pname, "no scalar column left to map to — hardcoded 0, "
+                                      "verify this is actually correct or fix by hand.")
+    return ref_args, sc_idx[0]
+
+
+def gen_sweep_fill_lines(layout, data_cols, swept_scalar_cols, n_var):
+    """Fill code for one sweep iteration: data cols get n_var randomized
+    elements, swept scalar cols get one randomized value each."""
+    lines = []
+    for dc in data_cols:
+        n_init, n_prol = layout[dc]['read_init'], layout[dc]['read_prolog']
+        n_ep = layout[dc]['read_epilog']
+        n_prefix = n_init + n_prol
+        if n_init >= 1:
+            lines.append(f"        col{dc}_in[0] = {n_var};  /* N (runtime) */")
+            for k in range(1, n_init):
+                lines.append(f"        col{dc}_in[{k}] = 0;")
+        for k in range(n_prol):
+            lines.append(f"        col{dc}_in[{n_init + k}] = 0;  /* prolog pad */")
+        rk = layout[dc]['read_kernel']
+        n_data_expr = f"{n_var} * {rk}" if rk > 1 else n_var
+        lines.append(f"        for (int _i = 0; _i < {n_data_expr}; _i++)")
+        lines.append(
+            f"            col{dc}_in[{n_prefix} + _i] = "
+            f"(int32_t)(sweep_rand() % {_SWEEP_DATA_RAND_MOD}) - {_SWEEP_DATA_RAND_BIAS};"
+        )
+        for k in range(n_ep):
+            lines.append(
+                f"        col{dc}_in[{n_prefix} + {n_data_expr} + {k}] = 0;  /* epilog pad */"
+            )
+    for sc in swept_scalar_cols:
+        n_sc = max(layout[sc]['read_init'] + layout[sc]['read_prolog'], 1)
+        for k in range(n_sc - 1):
+            lines.append(f"        col{sc}_in[{k}] = 0;  /* pad */")
+        lines.append(
+            f"        col{sc}_in[{n_sc - 1}] = (int32_t)(sweep_rand() % {_SWEEP_SCALAR_RAND_MASK + 1});"
+            f"  /* randomized input */"
+        )
+    return lines
+
+
+def gen_fixed_scalar_fill(layout, scalar_cols_leftover):
+    """One-time fill for scalar cols not tied to any reference-function
+    argument (e.g. isqrt32's loop-threshold/initial-mask column) — same
+    placeholder convention as the non-swept path. These are schedule
+    constants, not test data, so they are set once and never swept; review
+    them by hand same as you would in the non-swept output."""
+    lines = []
+    for sc in scalar_cols_leftover:
+        n_sc = max(layout[sc]['read_init'] + layout[sc]['read_prolog'], 1)
+        lines.append(f"    col{sc}_in[0] = 0;  /* TODO: verify fixed schedule constant, not swept */")
+        for k in range(1, n_sc):
+            lines.append(f"    col{sc}_in[{k}] = {k * 7};  /* TODO: verify fixed schedule constant, not swept */")
+    return lines
+
+
+def gen_sweep_section(layout, ref_info, min_n, sweep_mode='auto', sweep_range=None,
+                       sweep_trials=None, report=None):
+    """Build the sweep's declarations + main-loop body, or return None if this
+    kernel doesn't land in the simple auto-verified branch (in which case the
+    caller falls back to the single-shot gen_test_harness path unchanged).
+
+    sweep_mode: 'auto' | 'loop_bound' | 'scalar' | 'off' — see --sweep CLI flag.
+    sweep_range: optional (lo, hi) int tuple overriding the auto-sized doubling
+                 range for 'loop_bound' kind (see --sweep-range).
+    sweep_trials: optional int overriding _SWEEP_TRIALS for 'trials' kind
+                  (see --sweep-trials).
+    report: optional {'notes': [...], 'todo': [...]} dict, mutated in place —
+            collects the end-of-run summary printed by main().
+
+    Kind selection ('auto'): a data col alone (read_kernel > 0) is NOT enough
+    to justify sweeping N — a fixed-size loop (`for i < VEC_SIZE`) also reads
+    an array every iteration, and it has no runtime N to vary. The signal that
+    actually distinguishes them is whether the *reference function's own
+    signature* exposes a real int/unsigned/size_t size parameter (vec_sum's
+    `int N` vs. isqrt32 having no such param at all) — that parameter is only
+    there if the original C loop bound came from outside the function, i.e.
+    is genuinely runtime-variable. Forcing 'loop_bound' via --sweep bypasses
+    this check (for cases the heuristic gets wrong), but can't invent an N to
+    sweep if there's no data col to size in the first place.
+    """
+    if report is None:
+        report = {'notes': [], 'todo': []}
+    if sweep_mode == 'off':
+        report['notes'].append("Sweep disabled via --sweep off — single fixed-input "
+                                "PASS/FAIL run only.")
+        return None
+    status = _verify_path_status(layout, ref_info)
+    if status is not None:
+        tag, msg = status
+        if msg is not None:
+            report[tag].append(msg)
+        if sweep_mode in ('loop_bound', 'scalar'):
+            report['notes'].append(f"--sweep={sweep_mode} requested but ignored — this kernel "
+                                    f"isn't in the sweep-eligible verification path.")
+        return None
+
+    params = ref_info.get('params', [])
+    ret    = ref_info.get('return_type', 'int32_t')
+    fname  = ref_info['func_name']
+
+    data_cols   = [c for c, v in sorted(layout.items()) if v['read_kernel'] > 0]
+    scalar_cols = [c for c, v in sorted(layout.items())
+                   if v['read_kernel'] == 0 and v['reads'] and not v.get('has_swi')]
+    write_cols  = [c for c, v in sorted(layout.items())
+                   if v['writes'] and not v.get('has_swi')]
+    write_col   = write_cols[0]
+
+    size_candidates = _size_param_candidates(params)
+    has_size_param  = bool(size_candidates)
+    # No way to tell which is "really" the size when more than one param
+    # qualifies (e.g. ReverseBits(unsigned index, unsigned NumBits) — both
+    # look identical to this check). Guess the LAST one (common `(data, N)`
+    # convention); whether that guess is even acted on depends on `kind`
+    # below, so the report is written after that's decided.
+    size_param_idx = size_candidates[-1] if size_candidates else None
+
+    if sweep_mode == 'loop_bound':
+        if not data_cols:
+            report['notes'].append("--sweep=loop_bound requested but no array column was "
+                                    "found — nothing to size a loop-bound sweep over; used a "
+                                    "trials sweep instead.")
+            kind = 'trials'
+        else:
+            kind = 'loop_bound'
+    elif sweep_mode == 'scalar':
+        kind = 'trials'
+    else:  # auto
+        kind = 'loop_bound' if (data_cols and has_size_param) else 'trials'
+        if data_cols and not has_size_param:
+            report['notes'].append(
+                f"{fname}_ref() has an array column but no int/unsigned/size_t parameter — "
+                f"treating N as fixed, not sweeping problem size (pass --sweep loop_bound to "
+                f"force it if this kernel does have a real runtime size not visible in the "
+                f"reference signature).")
+
+    n_expr = 'n' if kind == 'loop_bound' else 'N_ELEMENTS_FIXED'
+    size_param_idx_used = size_param_idx if kind == 'loop_bound' else None
+
+    if len(size_candidates) > 1:
+        amb_names = ', '.join(f"'{params[i][1]}'" for i in size_candidates)
+        if kind == 'loop_bound':
+            report['todo'].append(
+                f"{fname}_ref() has {len(size_candidates)} int/unsigned/size_t parameters "
+                f"({amb_names}) — cgra_gen.py can't tell from the type alone which one is the "
+                f"real size; guessed '{params[size_param_idx][1]}' (the last one, marked "
+                f"with a TODO comment in the ref call in main.c). Verify that's actually the "
+                f"size; the others are being treated as plain scalar inputs, not also as the size.")
+        else:
+            report['todo'].append(
+                f"{fname}_ref() has {len(size_candidates)} int/unsigned/size_t parameters "
+                f"({amb_names}), but this kernel has no array to size (no sweep of N) — all "
+                f"of them are being randomized independently as plain scalar inputs every "
+                f"trial. If one of them is actually meant to be held fixed for this specific "
+                f"mapping (e.g. a trip count the schedule was built for) rather than varied, "
+                f"verify that by hand — cgra_gen.py can't tell the difference from the type.")
+
+    extra_decls = []
+    ref_args, consumed = _build_ref_args(params, data_cols, layout, scalar_cols, n_expr,
+                                          extra_decls, size_param_idx=size_param_idx_used,
+                                          ambiguous_size=(len(size_candidates) > 1 and kind == 'loop_bound'),
+                                          report=report)
+    swept_scalar_cols   = scalar_cols[:consumed]
+    leftover_scalar_cols = scalar_cols[consumed:]
+    primary_input_col = swept_scalar_cols[0] if (kind == 'trials' and swept_scalar_cols) else None
+
+    if any('NULL' in a for a in ref_args):
+        report['todo'].append(
+            f"{fname}_ref() has a pointer parameter with nothing to source it from (no data "
+            f"col, no spare scalar col) — the generated call passes NULL, which will crash "
+            f"or misbehave. Fix the ref call in main.c by hand.")
+
+    if leftover_scalar_cols:
+        cols_str = ', '.join(f"col{c}_in[]" for c in leftover_scalar_cols)
+        report['todo'].append(
+            f"{cols_str}: fixed placeholder values (0, 7, 14, ...) — not consumed by "
+            f"{fname}_ref()'s signature, so left at the tool's generic guess. Verify these "
+            f"match the kernel's real schedule constants (see the TODO comments in main.c).")
+
+    fixed_fill = gen_fixed_scalar_fill(layout, leftover_scalar_cols)
+    fixed_fill_block = ("\n".join(fixed_fill) + "\n") if fixed_fill else ""
+
+    if kind == 'loop_bound':
+        n_values = plan_loop_bound_sweep(layout, min_n, explicit_range=sweep_range)
+        n_max = max(n_values)
+        range_note = (
+            f" * Range set explicitly via --sweep-range." if sweep_range is not None else
+            f" * Largest N is capped to fit an on-chip memory budget of roughly\n"
+            f" * {_SWEEP_MEM_BUDGET_BYTES} bytes of sweep buffers — widen _SWEEP_MEM_BUDGET_BYTES\n"
+            f" * in util/cgra_gen.py, or pass --sweep-range MIN:MAX, for a different range."
+        )
+        io_decls = (
+            f"/* Doubling sweep of problem size N (kernel requires N >= {min_n}).\n"
+            f"{range_note} */\n"
+            f"static const int N_SWEEP[] = {{ {', '.join(str(v) for v in n_values)} }};\n"
+            f"#define N_SWEEP_COUNT ((int)(sizeof(N_SWEEP) / sizeof(N_SWEEP[0])))\n"
+            f"#define N_ELEMENTS_MAX {n_max}\n"
+            f"\n"
+            f"{gen_io_buffers(layout).replace('N_ELEMENTS', 'N_ELEMENTS_MAX')}"
+            f"\n{_RNG_BLOCK}"
+        )
+        report['notes'].append(
+            f"Sweep: loop_bound, N in {{{', '.join(str(v) for v in n_values)}}}"
+            + (" (explicit --sweep-range)." if sweep_range is not None
+               else f" (auto-sized to fit ~{_SWEEP_MEM_BUDGET_BYTES}B budget).")
+        )
+    else:
+        n_trials = sweep_trials if sweep_trials is not None else _SWEEP_TRIALS
+        if data_cols:
+            fixed_n_comment = (
+                f"/* TODO: verify N_ELEMENTS_FIXED — set to this kernel's structural minimum, "
+                f"not a confirmed array size. */\n"
+                f"#define N_ELEMENTS_FIXED  {min_n}\n"
+            )
+            report['todo'].append(
+                f"N_ELEMENTS_FIXED is set to {min_n} (structural minimum, not a confirmed "
+                f"array size) — verify it matches what this kernel was actually mapped for.")
+        else:
+            fixed_n_comment = "/* Fixed-schedule kernel: no loop bound, repeats with randomized inputs. */\n"
+        report['notes'].append(f"Sweep: trials ({n_trials} runs, randomized inputs).")
+        io_decls = (
+            f"{fixed_n_comment}"
+            f"#define SWEEP_TRIALS  {n_trials}\n"
+            f"\n"
+            f"{gen_io_buffers(layout).replace('N_ELEMENTS', 'N_ELEMENTS_FIXED')}"
+            f"\n{_RNG_BLOCK}"
+        )
+
+    ptr_setup = gen_ptr_setup(layout)
+
+    fill_n_var = 'n' if kind == 'loop_bound' else ('N_ELEMENTS_FIXED' if data_cols else None)
+    fill_lines = gen_sweep_fill_lines(layout, data_cols, swept_scalar_cols, fill_n_var)
+    fill_block = "\n".join(fill_lines)
+    extra_decls_block = ("\n".join(extra_decls) + "\n") if extra_decls else ""
+
+    if kind == 'loop_bound':
+        loop_open   = "    for (int _si = 0; _si < N_SWEEP_COUNT; _si++) {\n        int n = N_SWEEP[_si];\n"
+        label_print = (
+            'printf("SWEEP N=%d cpu_cycles=%u cgra_active=%u cgra_stall=%u speedup=%u.%02u '
+            'errors=%d got=%d expected=%d\\n",\n'
+            '               n, _cpu_cycles, _ca, _cs, _sp_i, _sp_f, _errors, '
+            '(int)_result, (int)_expected);'
+        )
+    else:
+        loop_open   = "    for (int _trial = 0; _trial < SWEEP_TRIALS; _trial++) {\n"
+        if primary_input_col is not None:
+            n_sc_primary = max(layout[primary_input_col]['read_init']
+                               + layout[primary_input_col]['read_prolog'], 1)
+            input_expr = f"col{primary_input_col}_in[{n_sc_primary - 1}]"
+        else:
+            input_expr = "0"
+        label_print = (
+            f'printf("SWEEP TRIAL=%d input=%d cpu_cycles=%u cgra_active=%u cgra_stall=%u '
+            f'speedup=%u.%02u errors=%d got=%d expected=%d\\n",\n'
+            f'               _trial, (int)({input_expr}), _cpu_cycles, _ca, _cs, _sp_i, _sp_f, '
+            f'_errors, (int)_result, (int)_expected);'
+        )
+
+    main_body = (
+        f"    /* ── Fixed (non-swept) scalar inputs — review before trusting ─── */\n"
+        f"{fixed_fill_block}"
+        f"    /* ── Stream pointers (constant across the sweep) ───────────────── */\n"
+        f"    cgra_wait_ready(&cgra);\n"
+        f"{ptr_setup}\n\n"
+        f"    int _sweep_total = 0, _sweep_pass = 0;\n"
+        f"{loop_open}"
+        f"{fill_block}\n"
+        f"\n"
+        f"        cgra_perf_cnt_reset(&cgra);\n"
+        f"        cgra_intr_flag = 0;\n"
+        f"        cgra_set_kernel(&cgra, KER_ID_1);\n"
+        f"        while (!cgra_intr_flag) wait_for_interrupt();\n"
+        f"\n"
+        f"        uint32_t _t0, _t1;\n"
+        f"        CSR_READ(CSR_REG_MCYCLE, &_t0);\n"
+        f"{extra_decls_block}"
+        f"        {ret} _expected = {fname}_ref({', '.join(ref_args)});\n"
+        f"        CSR_READ(CSR_REG_MCYCLE, &_t1);\n"
+        f"        uint32_t _cpu_cycles = _t1 - _t0;\n"
+        f"        {ret} _result = col{write_col}_out[0];\n"
+        f"        int _errors = (_result != _expected) ? 1 : 0;\n"
+        f"\n"
+        f"        uint32_t _ca = cgra_perf_cnt_get_col_active(&cgra, 0);\n"
+        f"        uint32_t _cs = cgra_perf_cnt_get_col_stall(&cgra, 0);\n"
+        f"        uint32_t _ct = _ca + _cs;\n"
+        f"        uint32_t _sp_i = 0, _sp_f = 0;\n"
+        f"        if (_cpu_cycles > 0 && _ct > 0) {{\n"
+        f"            uint32_t _sp = _cpu_cycles * 100u / _ct;\n"
+        f"            _sp_i = _sp / 100u; _sp_f = _sp % 100u;\n"
+        f"        }}\n"
+        f"        {label_print}\n"
+        f"\n"
+        f"        _sweep_total++;\n"
+        f"        if (!_errors) _sweep_pass++;\n"
+        f"    }}\n"
+        f"    printf(\"SWEEP SUMMARY total=%d passed=%d failed=%d\\n\",\n"
+        f"           _sweep_total, _sweep_pass, _sweep_total - _sweep_pass);\n"
+        f"\n"
+        f"    printf(\"Kernels executed: %d\\n\", cgra_perf_cnt_get_kernel(&cgra));\n"
+        f"    printf(_sweep_pass == _sweep_total ? \"### PASS ###\\n\" : \"### FAIL ###\\n\");\n"
+        f"    printf(\"### DONE ###\\n\");\n"
+        f"    return EXIT_SUCCESS;"
+    )
+
+    return {'io_decls': io_decls, 'main_body': main_body}
 
 
 # ─── C source parser ─────────────────────────────────────────────────────────
@@ -832,11 +1399,7 @@ def gen_test_harness(layout, ref_info):
 
 # ─── main.c template ──────────────────────────────────────────────────────────
 _MAIN_C_TEMPLATE = '''\
-/*
- * {app_name} — generated by util/cgra_gen.py from {ker_basename}
- *
- * TODO: describe what this kernel computes (one line).
- */
+/* {app_name} — generated by util/cgra_gen.py from {ker_basename} */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -864,10 +1427,7 @@ _MAIN_C_TEMPLATE = '''\
 {cmem_decl}
 /* ── Input / output buffers ──────────────────────────────────────────── */
 {io_comment}
-/* Number of loop iterations (must be >= {min_n}).  Change to test different sizes. */
-#define N_ELEMENTS  {min_n}
-
-{io_buffers}
+{io_decls}
 /* ── Interrupt ───────────────────────────────────────────────────────── */
 static volatile int8_t cgra_intr_flag;
 
@@ -897,6 +1457,14 @@ int main(void)
     /* ── Load bitstream ──────────────────────────────────────────── */
     cgra_cmem_init(cgra_cmem, cgra_kmem);
 
+{main_body}
+}}
+'''
+
+# Fallback main() body for kernels that don't land in the sweep-eligible
+# branch (SWI outputs, void-return array kernels, no --ref-src, etc.) —
+# byte-identical to the single-shot harness this replaced.
+_OLD_MAIN_BODY_TEMPLATE = '''\
     /* ── Test data ──────────────────────────────────────────────── */
 {test_fill}
     /* ── Run kernel ──────────────────────────────────────────────── */
@@ -929,11 +1497,12 @@ int main(void)
     }}
 
     printf("### DONE ###\\n");
-    return EXIT_SUCCESS;
-}}
-'''
+    return EXIT_SUCCESS;'''
 
-def gen_main_c(ctx, app_name, kernel_file, ref_info=None):
+def gen_main_c(ctx, app_name, kernel_file, ref_info=None,
+               sweep_mode='auto', sweep_range=None, sweep_trials=None, report=None):
+    if report is None:
+        report = {'notes': [], 'todo': []}
     n_kernels  = ctx['ker_next_id'] - 1
     kernel_ids = "\n".join(f"#define KER_ID_{i}  {i}" for i in range(1, n_kernels + 1))
     layout     = infer_io_layout(ctx)
@@ -941,26 +1510,67 @@ def gen_main_c(ctx, app_name, kernel_file, ref_info=None):
     prolog_len = si.get('prolog_end', 0) - si.get('init_end', 0)
     min_n      = prolog_len + 1
 
+    if n_kernels > 1:
+        kernel_ids += (
+            f"\n/* TODO: only KER_ID_1 is launched below — KER_ID_2..{n_kernels} are encoded "
+            f"but never exercised. */"
+        )
+        report['todo'].append(
+            f"{n_kernels} kernels loaded into this binary's CMEM/KMEM, but main.c only ever "
+            f"launches KER_ID_1 (see the comment near the KER_ID defines) — the others are "
+            f"encoded but never exercised by this generated test/sweep harness.")
+
+    col_roles = gen_io_role_report(layout)
+    if col_roles:
+        report['notes'].append("Column roles auto-inferred from CMEM: " + "; ".join(col_roles))
+    else:
+        report['todo'].append("No LWD/SWD/SWI detected anywhere in the CMEM — this kernel has "
+                               "no memory I/O. Confirm that's actually expected for this kernel.")
+
     has_swi = any(v.get('has_swi') for v in layout.values())
     if has_swi:
         swi_cols_info = [(c, v) for c, v in sorted(layout.items()) if v.get('has_swi')]
         for sc, sv in swi_cols_info:
             swi_size = _buf_size_expr(sv, 'swi_out')
-            print(f"  ASSUMPTION: col{sc} uses SWI — declared swi_col{sc}_out[{swi_size}],"
-                  f" col{sc}_in[0] auto-set to point at it.")
-            print(f"              SWI writes sequentially from base address (same as SWD).")
-            print(f"              If wrong: set col{sc}_in[0] manually in main.c.")
+            report['todo'].append(
+                f"col{sc}'s SWI writes are assumed sequential from a base address (same as "
+                f"SWD) — declared swi_col{sc}_out[{swi_size}], col{sc}_in[0] auto-set to point "
+                f"at it (see the comment above the buffer declarations in main.c). Confirm "
+                f"that's actually how this kernel writes; if not, fix col{sc}_in[0] by hand.")
 
     if ref_info:
-        ref_func = ref_info['func_ref']
+        ref_func = (
+            f"/* TODO: whole function copied verbatim (only #pragma stripped) — code outside "
+            f"the loop did NOT run on the CGRA, verify it can't affect the result. */\n"
+            f"{ref_info['func_ref']}"
+        )
+        report['todo'].append(
+            f"{ref_info['func_name']}_ref() is the whole original C function, not just the "
+            f"pragma'd loop (see the TODO comment above it in main.c).")
     else:
         ref_func = (
-            "/* MANUAL: reference function not auto-extracted\n"
-            " *   (pass --ref-src <source.c> with a #pragma cgra acc function to get this).\n"
-            " * Write your own reference here to enable PASS/FAIL comparison. */"
+            "/* TODO: write a reference function here (pass --ref-src to auto-extract one). */"
         )
 
-    test_fill, test_verify = gen_test_harness(layout, ref_info)
+    sweep = gen_sweep_section(layout, ref_info, min_n,
+                               sweep_mode=sweep_mode, sweep_range=sweep_range,
+                               sweep_trials=sweep_trials, report=report)
+    if sweep is not None:
+        io_decls  = sweep['io_decls']
+        main_body = sweep['main_body']
+    else:
+        test_fill, test_verify = gen_test_harness(layout, ref_info)
+        io_decls = (
+            f"/* Number of loop iterations (must be >= {min_n}).  Change to test different sizes. */\n"
+            f"#define N_ELEMENTS  {min_n}\n"
+            f"\n"
+            f"{gen_io_buffers(layout)}"
+        )
+        main_body = _OLD_MAIN_BODY_TEMPLATE.format(
+            test_fill   = test_fill,
+            ptr_setup   = gen_ptr_setup(layout),
+            test_verify = test_verify,
+        )
 
     return _MAIN_C_TEMPLATE.format(
         app_name    = app_name,
@@ -971,12 +1581,9 @@ def gen_main_c(ctx, app_name, kernel_file, ref_info=None):
         kmem_decl   = gen_kmem_c(ctx),
         cmem_decl   = gen_cmem_c(ctx),
         io_comment  = gen_io_comment(layout),
-        io_buffers  = gen_io_buffers(layout),
-        ptr_setup   = gen_ptr_setup(layout),
+        io_decls    = io_decls,
         ref_func    = ref_func,
-        min_n       = min_n,
-        test_fill   = test_fill,
-        test_verify = test_verify,
+        main_body   = main_body,
     )
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
@@ -991,17 +1598,43 @@ def main():
     ap.add_argument('--ref-src', default=None,
                     help='Original C source file with #pragma cgra acc — '
                          'auto-extracts the reference function into main.c')
+    ap.add_argument('--sweep', choices=['auto', 'loop_bound', 'scalar', 'off'], default='auto',
+                    help="Benchmarking sweep mode (default: auto). 'auto' sweeps problem "
+                         "size N only if the reference function's signature has a real "
+                         "int/unsigned/size_t parameter (i.e. the C loop bound came from "
+                         "outside the function); otherwise it repeats randomized-input "
+                         "trials at a fixed N. 'loop_bound'/'scalar' force one or the "
+                         "other (loop_bound requires an array column to size). 'off' "
+                         "disables the sweep (single fixed-input PASS/FAIL run).")
+    ap.add_argument('--sweep-range', default=None, metavar='MIN:MAX',
+                    help='Override the auto-sized doubling range for a loop_bound sweep, '
+                         'e.g. --sweep-range 4:2048. Ignored for a trials sweep.')
+    ap.add_argument('--sweep-trials', type=int, default=None, metavar='N',
+                    help=f'Override the number of randomized-input trials for a trials '
+                         f'sweep (default: {_SWEEP_TRIALS}). Ignored for a loop_bound sweep.')
     args = ap.parse_args()
 
     if len(args.kernels) < 2:
         ap.error('Provide at least one kernel spec file and an app name, e.g.: '
                  'util/cgra_gen.py instructions_foo.py my_app')
 
+    sweep_range = None
+    if args.sweep_range:
+        try:
+            lo_s, hi_s = args.sweep_range.split(':')
+            sweep_range = (int(lo_s), int(hi_s))
+            if sweep_range[0] <= 0 or sweep_range[1] < sweep_range[0]:
+                raise ValueError
+        except ValueError:
+            ap.error(f"--sweep-range must be MIN:MAX with 0 < MIN <= MAX, got: {args.sweep_range}")
+
     # Last positional arg is the app name; all others are kernel spec files
     *kernel_files, app_name = args.kernels
     for kf in kernel_files:
         if not os.path.isfile(kf):
             sys.exit(f"ERROR: kernel spec not found: {kf}")
+
+    report = {'notes': [], 'todo': []}
 
     ref_info = None
     if args.ref_src:
@@ -1012,6 +1645,13 @@ def main():
         else:
             print(f"  WARNING: no #pragma cgra acc found in {args.ref_src} "
                   f"— reference function will be a TODO stub")
+            report['todo'].append(
+                f"No #pragma cgra acc found in {args.ref_src} — reference function is a "
+                f"MANUAL stub; write it by hand to enable PASS/FAIL verification.")
+    else:
+        report['todo'].append(
+            "No --ref-src given — reference function is a MANUAL stub; no automatic "
+            "PASS/FAIL or sweep.")
 
     ctx = load_kernel_specs(kernel_files)
 
@@ -1036,10 +1676,28 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     if os.path.exists(out_file):
         print(f"WARNING: overwriting existing {out_file}")
-    content = gen_main_c(ctx, app_name, kernel_files[0], ref_info=ref_info)
+    content = gen_main_c(ctx, app_name, kernel_files[0], ref_info=ref_info,
+                          sweep_mode=args.sweep, sweep_range=sweep_range,
+                          sweep_trials=args.sweep_trials, report=report)
     with open(out_file, 'w') as f:
         f.write(content)
     print(f"Generated: {out_file}")
+
+    # ── End-of-run summary — everything worth knowing before trusting this build ──
+    print(f"\n{'=' * 68}")
+    print(f"  Summary for {app_name}")
+    print(f"{'=' * 68}")
+    if report['notes']:
+        print("Notes / assumptions:")
+        for msg in report['notes']:
+            print(f"  - {msg}")
+    if report['todo']:
+        print("Manual action needed:")
+        for msg in report['todo']:
+            print(f"  - {msg}")
+    else:
+        print("Manual action needed: none — should be ready to build and test as-is.")
+    print(f"{'=' * 68}")
 
 
 if __name__ == '__main__':
