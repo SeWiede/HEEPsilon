@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""cgra_satmap.py — full pipeline: C source → ready-to-run CGRA app in one command.
+"""cgra_satmap.py — START HERE if you have a plain .c file with a
+#pragma cgra acc loop. Full pipeline: C source → ready-to-run CGRA app in
+one command.
+
+(If you already have a cgra-code-acc1 from a manual SAT-MapIt run, use
+util/satmapit_parse.py instead — skips the clang/opt/mapper steps below.
+If you already have a reviewed instructions_*.py, use util/cgra_gen.py
+directly to (re)generate main.c.)
 
 Invokes clang → opt → SAT-MapIt mapper → satmapit_parse.py → cgra_gen.py.
 
@@ -15,14 +22,17 @@ Example:
     python util/cgra_satmap.py my_kernel.c
 
 Output (with --app):
-    sw/satmapit/<app>/main.c  — complete test app, no manual edits needed
+    sw/satmapit/<app>/main.c — a complete, runnable app. cgra_gen.py's own
+    end-of-run summary (printed above the banner at the end of this run)
+    lists anything it had to guess at that's worth reviewing before you
+    trust it — read that, since it varies per kernel.
 
 Everything is auto-generated:
     - CGRA bitstream (KMEM + CMEM arrays)
     - Buffer declarations with correct sizes (computed from section breakdown)
     - Stream pointer setup (which cols get read/write pointers, from CMEM scan)
     - Reference function (extracted from C source, pragma stripped, _ref suffix)
-    - Test data fill + PASS/FAIL comparison to reference function
+    - Benchmarking sweep + PASS/FAIL comparison to the reference function
 
 Transforms applied automatically by satmapit_parse.py:
     SMUL → NOP, LWI → LWD, address SADDs → NOP, phi nodes classified,
@@ -47,10 +57,57 @@ _DEFAULT_SATMAPIT_DIR = os.environ.get(
     os.path.join(os.path.dirname(_HEEPSILON_ROOT), "SAT-MapIt")
 )
 
+def _grid_from_cgra_header():
+    """(n_row, n_col) of the built hardware, from the generated driver header."""
+    path = os.path.join(_HEEPSILON_ROOT, "sw", "external", "drivers", "cgra", "cgra.h")
+    try:
+        with open(path) as fh:
+            text = fh.read()
+    except OSError:
+        return 4, 4
+    def _get(macro, dflt):
+        m = re.search(rf"^#define\s+{macro}\s+(\d+)\s*$", text, re.MULTILINE)
+        return int(m.group(1)) if m else dflt
+    return _get("CGRA_N_ROWS", 4), _get("CGRA_N_COLS", 4)
+
+_DEF_N_ROW, _DEF_N_COL = _grid_from_cgra_header()
+
 _CLANG_REL  = "llvm-project/build/bin/clang"
 _OPT_REL    = "llvm-project/build/bin/opt"
 _MAPPER_REL = "mapper/main.py"
 _PYTHON_REL = "cgra-compiler/bin/python"
+
+# Known markers for instructions/patterns SAT-MapIt's own tooling silently
+# fails on internally (exit code 0) rather than raising an error -- e.g. an
+# LLVM intrinsic call (min/max, etc.) that CGRAExtract.cpp's instructionSelection()
+# has no case for, which leaves a DFG node's opcode at its unset default (-1) and
+# surfaces only as "UNDEF" several stages later in cgra_gen.py. Catch it here,
+# right at the source, instead of letting it propagate into a confusing crash
+# further down the pipeline.
+_KNOWN_FAILURE_MARKERS = [
+    "Instruction not supported or not defined in the ISA",
+    "No assignment for instuction",
+    "unsupported instruciton",
+    "UNDEF",
+]
+
+
+def _check_for_known_failures(text, desc):
+    if not text:
+        return
+    for marker in _KNOWN_FAILURE_MARKERS:
+        if marker in text:
+            matching_lines = "\n".join(
+                l for l in text.splitlines() if marker in l
+            )
+            sys.exit(
+                f"ERROR: {desc} reported an unhandled instruction/pattern "
+                f"(exit code was 0, but this is a known silent-failure marker):\n"
+                f"{matching_lines}\n"
+                f"This usually means the C source contains a pattern (e.g. an "
+                f"LLVM intrinsic call like min/max) that SAT-MapIt's extraction "
+                f"pass has no instruction-selection case for."
+            )
 
 
 def run(cmd, cwd, desc):
@@ -59,6 +116,8 @@ def run(cmd, cwd, desc):
     if result.returncode != 0:
         print(f"  STDERR:\n{result.stderr}")
         sys.exit(f"ERROR: {desc} failed (exit {result.returncode})")
+    _check_for_known_failures(result.stderr, desc)
+    _check_for_known_failures(result.stdout, desc)
     return result.stdout
 
 
@@ -76,17 +135,20 @@ def main():
     ap.add_argument("--name",         default=None,
                     help="Output name stem, e.g. 'instructions_vec_sum' "
                          "(default: instructions_<source basename>)")
-    ap.add_argument("--n-row",        type=int, default=4,
-                    help="HEEPsilon N_ROW — SAT-MapIt -x value (default 4)")
-    ap.add_argument("--n-col",        type=int, default=4,
-                    help="HEEPsilon N_COL — SAT-MapIt -y value (default 4)")
+    ap.add_argument("--n-row",        type=int, default=_DEF_N_ROW,
+                    help=f"HEEPsilon N_ROW — SAT-MapIt -x value "
+                         f"(default {_DEF_N_ROW}, from the generated cgra.h)")
+    ap.add_argument("--n-col",        type=int, default=_DEF_N_COL,
+                    help=f"HEEPsilon N_COL — SAT-MapIt -y value "
+                         f"(default {_DEF_N_COL}, from the generated cgra.h)")
     ap.add_argument("--app",          default=None,
                     help="Generate sw/satmapit/<app>/main.c (complete, runnable)")
     ap.add_argument("--satmapit-dir", default=None,
                     help=f"Path to SAT-MapIt repo (default: {_DEFAULT_SATMAPIT_DIR})")
+    # (unrecognised arguments are forwarded to cgra_gen.py — see below)
     ap.add_argument("--out-dir",      default="sw/satmapit",
                     help="Output directory for instructions_*.py and app/ (default: sw/satmapit)")
-    args = ap.parse_args()
+    args, gen_extra = ap.parse_known_args()
 
     satmapit_dir = os.path.abspath(args.satmapit_dir or _DEFAULT_SATMAPIT_DIR)
     source_abs   = os.path.abspath(args.source)
@@ -152,6 +214,8 @@ def main():
         if result.returncode != 0:
             print(f"  STDERR:\n{result.stderr}")
             sys.exit(f"ERROR: mapper failed for {acc_dir} (exit {result.returncode})")
+        _check_for_known_failures(result.stderr, f"mapper ({acc_dir})")
+        _check_for_known_failures(result.stdout, f"mapper ({acc_dir})")
         with open(out_file, "w") as fout:
             fout.write(result.stdout)
         acc_code_files.append(out_file)
@@ -176,24 +240,36 @@ def main():
     else:
         print(f"\n[3/{n_steps}] done — generating instructions file ...", flush=True)
 
+    # With --app the schedule belongs inside the app's own directory: it is what
+    # the generated summary's TODOs tell you to consult, and leaving it loose in
+    # sw/satmapit/ just accumulates files next to the app dirs. Without --app
+    # there is no app dir yet, so it stays at the top level.
+    draft_dir = os.path.join(out_dir, args.app) if args.app else out_dir
+    os.makedirs(draft_dir, exist_ok=True)
+
     result = subprocess.run(
         [sys.executable, parse_py, acc_file,
          "--name", name, "--n-row", str(args.n_row), "--n-col", str(args.n_col),
-         "--out-dir", out_dir, "--pipeline"],
+         "--out-dir", draft_dir, "--pipeline"],
         capture_output=False
     )
     if result.returncode != 0:
         sys.exit("ERROR: satmapit_parse.py failed")
 
-    draft = os.path.join(out_dir, name + ".py")
+    draft = os.path.join(draft_dir, name + ".py")
 
     if not args.app:
         print(f"\nNext: python util/cgra_gen.py {draft} <app_name>")
         return
 
+    # Anything this script doesn't recognise is forwarded verbatim to
+    # cgra_gen.py, so its flags (--rotate-cols, --sweep, --sweep-range,
+    # --sweep-trials, ...) are reachable from this entry point too — which is
+    # the one people actually use. Without this they were only usable by
+    # invoking cgra_gen.py directly on an already-generated instructions file.
     result2 = subprocess.run(
         [sys.executable, gen_py, draft, args.app,
-         "--out-dir", out_dir, "--ref-src", source_abs],
+         "--out-dir", out_dir, "--ref-src", source_abs] + gen_extra,
         capture_output=False
     )
     if result2.returncode != 0:
@@ -203,14 +279,10 @@ def main():
     print(f"\n{'='*60}")
     print(f"Done: {main_c}")
     print(f"{'='*60}")
+    # NOTE: cgra_gen.py just printed its own end-of-run summary above (assumptions,
+    # column-role inference, anything needing manual review) — read that, not a
+    # canned claim here, since whether edits are needed varies per kernel.
     print(f"""
-Everything auto-generated — no edits needed:
-  - CGRA bitstream (KMEM + CMEM)
-  - Buffer sizes computed from schedule section breakdown
-  - Stream pointer setup (read/write cols auto-detected)
-  - Reference function {base}_ref() from your C source
-  - Test data fill + PASS/FAIL verification
-
 Simulate:  python run.py --simulator verilator --tests {args.app}
 On FPGA:   python run.py --board zcu104 --tests {args.app}
 """)

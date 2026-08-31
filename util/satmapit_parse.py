@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""satmapit_parse.py — translate a SAT-MapIt cgra-code-acc1 into instructions_*.py.
+"""satmapit_parse.py — for when you already ran SAT-MapIt by hand and have a
+cgra-code-acc1 file. Translates it into instructions_*.py.
+
+(If you're starting from a plain .c file instead, use util/cgra_satmap.py —
+it runs clang/opt/the mapper for you and calls this automatically. If you
+already have a reviewed instructions_*.py, use util/cgra_gen.py directly to
+(re)generate main.c — that's the next/last step after this one.)
 
 Default SAT-MapIt invocation (full 4×4 grid, -x 4 -y 4):
     ./cgralang -f my_kernel.c -x 4 -y 4
@@ -579,9 +585,31 @@ def apply_transforms(sched, info, n_row=4, n_col=4):
                     notes.append(f"T={t} PE{pe}: epilog phi-reset '{raw.strip()}' → NOP")
                     continue
 
-            # Rule 2: SMUL → NOP only when it is address arithmetic (PE is in LWI chain).
-            # SMUL for data computation (e.g. squaring in isqrt) must be kept.
-            if op == 'SMUL' and pe in lwi_pes:
+            # Rule 2: SMUL → NOP only when it is address arithmetic (PE is in LWI
+            # chain AND this specific SMUL multiplies by a bare immediate, e.g.
+            # `SMUL ROUT, RCT, 4` -- SAT-MapIt always encodes an address-stride
+            # multiply this way). SMUL for data computation (e.g. squaring in
+            # isqrt, or a genuine two-array product) has a named register/mesh
+            # source as srcB (e.g. `SMUL ROUT, RCT, ROUT`) and must be kept.
+            #
+            # The `p.get('srcB') == 'IMM'` check matters because SAT-MapIt's
+            # scheduler can legitimately pack a real data-computation SMUL onto
+            # the very same physical PE that also loads data for an unrelated
+            # LWI at a different time-slot -- checking "is this PE ever
+            # involved in any LWI" alone (the old condition) deletes that real
+            # multiply as collateral damage. Confirmed via a two-array kernel
+            # (z[i] = x[i] * y[i]): the real product's SMUL landed on the same
+            # PE as the y[i] load and was wrongly NOP'd, so the CGRA silently
+            # emitted a passthrough of the loaded array instead of the product.
+            #
+            # Known residual gap: a source-level multiply by a literal constant
+            # (e.g. `z[i] = x[i] * 3`) on a PE that also happens to be in
+            # lwi_pes would still be misidentified as address arithmetic here,
+            # since it has the same immediate-operand shape. Not yet seen in
+            # any tested kernel; would need a dataflow-based distinction
+            # (trace whether this specific SMUL's result actually feeds an
+            # LWI's address) to close fully.
+            if op == 'SMUL' and pe in lwi_pes and p.get('srcB') == 'IMM':
                 mod_list.append('NOP')
                 notes.append(f"T={t} PE{pe}: SMUL removed (address arithmetic)")
                 continue
@@ -624,8 +652,15 @@ def apply_transforms(sched, info, n_row=4, n_col=4):
             # accumulator PE; NOP subsequent ones (SMUL→NOP + LWI→LWD reduces
             # pipeline depth to 1 cycle, so only 1 drain step is needed).
             if (pe in accumulator_pes and kernel_end <= t < epilog_end and op == 'SADD'):
+                # SADD is commutative and the mesh operand can land in either
+                # field: clang emits `add <load>, <acc-phi>` (mesh dir in srcA),
+                # while a shader's `acc += data[i]` emits `add <acc-phi>, <load>`
+                # (mesh dir in srcB). Checking srcA alone silently skipped this
+                # rule for the latter, leaving an extra epilog accumulation that
+                # corrupts the result. Found in spike-1a; see SPIKE1A_NOTES.md.
                 srcA = (p.get('srcA') or '').upper()
-                if srcA in _MESH_DIRS:
+                srcB = (p.get('srcB') or '').upper()
+                if srcA in _MESH_DIRS or srcB in _MESH_DIRS:
                     if pe in epilog_acc_seen:
                         mod_list.append('NOP')
                         notes.append(f"T={t} PE{pe}: extra epilog accumulation → NOP"

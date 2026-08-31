@@ -1,0 +1,12 @@
+# Optional extra dependency for util/cgra_gen.py's libclang-based --ref-src
+# extraction (semantic C parsing instead of regex/brace-counting — see
+# docs/cgra_kernel_toolchain.md TODO section 2.2a). Not part of the vendored
+# X-HEEP conda_environment.yml (hw/vendor/esl_epfl_x_heep/util/) on purpose,
+# to avoid diverging from upstream there.
+#
+# Install into the core-v-mini-mcu conda env with:
+#   conda run -n core-v-mini-mcu pip install -r util/python-requirements-satmapit.txt
+#
+# Version must match the clang built in SAT-MapIt's llvm-project/build --
+# check with: <SAT-MapIt>/llvm-project/build/bin/clang --version
+clang==20.*
