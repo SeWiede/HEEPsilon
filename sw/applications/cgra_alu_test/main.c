@@ -72,9 +72,16 @@
 #define OP_EXIT   25
 #define OP_SABS   26
 
-/* KMEM word: [15:12]=col_mask [11:5]=start_addr [4:0]=(n_instr-1) */
-#define KMEM_WORD(cols, start, n) \
-    (((uint32_t)(cols) << 12) | ((uint32_t)(start) << 5) | ((uint32_t)(n) - 1))
+/* KMEM word: [col_mask][start_addr][n_instr-1]
+ * Field widths follow the CGRA config, they are not fixed: start_addr is
+ * CGRA_CMEM_BK_DEPTH_LOG2 bits and n_instr-1 is CGRA_RCS_NUM_CREG_LOG2 bits, so
+ * col_mask sits at bit (7+5)=12 on a 128-deep bank (4x4, 3x3) but at bit
+ * (9+5)=14 on a 512-deep one (5x5). Hardcoding 12 silently corrupts the word on
+ * any grid whose cmem_bk_depth differs. */
+#define KMEM_WORD(cols, start, n)                                              \
+    (  ((uint32_t)(cols)  << (CGRA_CMEM_BK_DEPTH_LOG2 + CGRA_RCS_NUM_CREG_LOG2)) \
+     | ((uint32_t)(start) <<  CGRA_RCS_NUM_CREG_LOG2)                            \
+     | ((uint32_t)(n) - 1))
 /* Col-0 only kernel */
 #define KW1(start, n) KMEM_WORD(0x1, (start), (n))
 
