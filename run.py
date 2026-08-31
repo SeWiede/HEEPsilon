@@ -41,6 +41,43 @@ XHEEP_APPS_DIR     = SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/sw/applications"
 SW_BUILD           = SCRIPT_DIR / "sw/build"
 DEFAULT_CONDA      = "core-v-mini-mcu"
 
+# ── CGRA grid configuration ───────────────────────────────────────────────────
+# Which grid the checked-out generated RTL/SW belong to, written by `make
+# mcu-gen` (see Makefile CGRA_CFG).  Each grid owns a separate FuseSoC build
+# root, so simulators and bitstreams for different grids coexist.
+
+def available_cgra_cfgs() -> list:
+    return sorted(p.stem.replace("heepsilon_cfg_", "")
+                  for p in (SCRIPT_DIR / "cfg").glob("heepsilon_cfg_*.hjson"))
+
+def _active_cgra_cfg() -> str:
+    # --cgra-cfg is resolved here, before BUILD_ROOT and BOARD_CONFIG are built
+    # from it, so every path in this module belongs to the requested grid.
+    # argparse runs too late for that.
+    for i, a in enumerate(sys.argv):
+        if a == "--cgra-cfg" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if a.startswith("--cgra-cfg="):
+            return a.split("=", 1)[1]
+    try:
+        return (SCRIPT_DIR / ".heepsilon_active_cfg").read_text().strip() or "4x4"
+    except OSError:
+        return "4x4"
+
+def _stamped_cgra_cfg() -> Optional[str]:
+    """Grid the checked-out generated files belong to, None if never generated."""
+    try:
+        return (SCRIPT_DIR / ".heepsilon_active_cfg").read_text().strip() or None
+    except OSError:
+        return None
+
+CGRA_CFG = _active_cgra_cfg()
+# 4x4 keeps FuseSoC's historical default path.
+BUILD_ROOT = SCRIPT_DIR / (
+    "build/eslepfl_systems_heepsilon_0" if CGRA_CFG == "4x4"
+    else f"build/heepsilon_{CGRA_CFG}"
+)
+
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 
 RESET  = "\033[0m"
@@ -102,7 +139,7 @@ SIM_TARGETS = {
 DEFAULT_SIMULATOR = "verilator"
 
 def sim_log_dir(simulator: str = DEFAULT_SIMULATOR) -> Path:
-    return SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0" / SIM_TARGETS[simulator]["log_dir"]
+    return BUILD_ROOT / SIM_TARGETS[simulator]["log_dir"]
 
 def _sim_built(simulator: str) -> bool:
     return sim_log_dir(simulator).is_dir()
@@ -115,7 +152,7 @@ UART_IDLE_TIMEOUT = 30  # seconds
 BOARD_CONFIG: dict[str, dict] = {
     "pynq-z1": {
         "vid_pid":     "0403:6010",
-        "bitstream":   SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0/pynq-z1-vivado/eslepfl_systems_heepsilon_0.bit",
+        "bitstream":   BUILD_ROOT / "pynq-z1-vivado/eslepfl_systems_heepsilon_0.bit",
         "openocd_cfg": SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
         "program_tcl": SCRIPT_DIR / "program_fpga.tcl",
         "uart_search": ["CP2102", "Silicon_Labs"],
@@ -124,7 +161,7 @@ BOARD_CONFIG: dict[str, dict] = {
     },
     "pynq-z2": {
         "vid_pid":     "0403:6010",
-        "bitstream":   SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0/pynq-z2-vivado/eslepfl_systems_heepsilon_0.bit",
+        "bitstream":   BUILD_ROOT / "pynq-z2-vivado/eslepfl_systems_heepsilon_0.bit",
         "openocd_cfg": SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-pynq-z2-bscan.cfg",
         "program_tcl": SCRIPT_DIR / "program_fpga.tcl",
         "uart_search": ["CP2102", "Silicon_Labs"],
@@ -133,7 +170,7 @@ BOARD_CONFIG: dict[str, dict] = {
     },
     "zcu104": {
         "vid_pid":         "0403:6011",
-        "bitstream":       SCRIPT_DIR / "build/eslepfl_systems_heepsilon_0/zcu104-vivado/eslepfl_systems_heepsilon_0.bit",
+        "bitstream":       BUILD_ROOT / "zcu104-vivado/eslepfl_systems_heepsilon_0.bit",
         "openocd_cfg":     SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-zcu104-bscan.cfg",
         "openocd_cfg_ext": SCRIPT_DIR / "hw/vendor/esl_epfl_x_heep/tb/core-v-mini-mcu-zcu104-ext-jtag.cfg",
         "program_tcl":     SCRIPT_DIR / "program_fpga_zcu104.tcl",
@@ -254,10 +291,11 @@ TESTS_BY_NAME: dict[str, TestCase] = {t.app: t for t in TESTS}
 
 # ── Build configurations (auto-discovered from configs/) ───────────────────────
 
-# HEEPsilon is synthesised with 6 RAM banks by default.
-# SW compilation and mcu-gen must use the same count, otherwise the linker
-# script places sections at addresses that don't exist → silent crash, no UART.
-HEEPSILON_DEFAULT_MEMORY_BANKS = 6
+# Bank count must match the bitstream on the FPGA, otherwise the linker script
+# places sections at addresses that don't exist → silent crash, no UART.
+# None = let the Makefile pick the per-CGRA_CFG default (4x4: 6, others: 12);
+# --memory-banks overrides it.
+HEEPSILON_DEFAULT_MEMORY_BANKS = None
 
 @dataclass
 class BuildConfig:
@@ -378,14 +416,16 @@ def mcu_gen(
     dry_run:      bool = False,
     conda_env:    str  = DEFAULT_CONDA,
     config:       Optional[BuildConfig] = None,
-    memory_banks: int  = HEEPSILON_DEFAULT_MEMORY_BANKS,
+    memory_banks: Optional[int] = HEEPSILON_DEFAULT_MEMORY_BANKS,
 ) -> None:
     cfg = config or BUILD_CONFIGS_BY_NAME[DEFAULT_CONFIG]
-    info(f"Running mcu-gen  (X_HEEP_CFG={cfg.x_heep_cfg}  MEMORY_BANKS={memory_banks})  [{cfg.name}]")
-    r = run_cmd(
-        ["make", "mcu-gen", f"X_HEEP_CFG={cfg.x_heep_cfg}", f"MEMORY_BANKS={memory_banks}"],
-        conda_env=conda_env, dry_run=dry_run,
-    )
+    banks = f"{memory_banks}" if memory_banks else "<Makefile default>"
+    info(f"Running mcu-gen  (X_HEEP_CFG={cfg.x_heep_cfg}  MEMORY_BANKS={banks}  "
+         f"CGRA_CFG={CGRA_CFG})  [{cfg.name}]")
+    cmd = ["make", "mcu-gen", f"X_HEEP_CFG={cfg.x_heep_cfg}", f"CGRA_CFG={CGRA_CFG}"]
+    if memory_banks:
+        cmd.append(f"MEMORY_BANKS={memory_banks}")
+    r = run_cmd(cmd, conda_env=conda_env, dry_run=dry_run)
     if r.returncode != 0:
         sys.exit("mcu-gen failed — aborting.")
 
@@ -396,7 +436,7 @@ def build_sim(
 ) -> None:
     target = SIM_TARGETS[simulator]["build_target"]
     info(f"Building {simulator} simulator  ({target})")
-    r = run_cmd(["make", target], conda_env=conda_env, dry_run=dry_run)
+    r = run_cmd(["make", target, f"CGRA_CFG={CGRA_CFG}"], conda_env=conda_env, dry_run=dry_run)
     if r.returncode != 0:
         sys.exit(f"{target} build failed — aborting.")
 
@@ -410,7 +450,7 @@ def build_app(
     target = "sim" if board == "sim" else board
     header(f"Building {app}  (linker={linker}  target={target})")
     app_dir = "satmapit" if (SATMAPIT_APPS_DIR / app).is_dir() else "applications"
-    r = run_cmd(["make", "app", f"PROJECT={app}", f"APP_DIR={app_dir}",
+    r = run_cmd(["make", "app", f"PROJECT={app}", f"APP_DIR={app_dir}", f"CGRA_CFG={CGRA_CFG}",
                  f"LINKER={linker}", f"TARGET={target}"],
                 dry_run=dry_run)
     if not dry_run and r.returncode != 0:
@@ -454,7 +494,8 @@ def run_sim_test(
 
         app_dir = "satmapit" if (SATMAPIT_APPS_DIR / tc.app).is_dir() else "applications"
         r = run_cmd(
-            ["make", run_target, f"PROJECT={tc.app}", f"APP_DIR={app_dir}"],
+            ["make", run_target, f"PROJECT={tc.app}", f"APP_DIR={app_dir}",
+             f"CGRA_CFG={CGRA_CFG}"],
             conda_env=conda_env, dry_run=dry_run, timeout=timeout,
         )
 
@@ -616,7 +657,7 @@ def check_bitstream(board: str) -> None:
     if not answer.startswith("y"):
         sys.exit("Bitstream not available — aborting.")
     header("Building FPGA bitstream")
-    cmd = run_cmd(["make", "vivado-fpga", f"FPGA_BOARD={board}",
+    cmd = run_cmd(["make", "vivado-fpga", f"FPGA_BOARD={board}", f"CGRA_CFG={CGRA_CFG}",
                    "FUSESOC_FLAGS=--flag=use_bscane_xilinx"])
     if not _bitstream_fresh(board):
         sys.exit("Build completed but bitstream still not valid — check buildvivado.log.")
@@ -1031,7 +1072,7 @@ def _sim_output_for(tc: TestCase, simulator: str = DEFAULT_SIMULATOR) -> str:
         log_path.unlink()
     run_target = SIM_TARGETS[simulator]["run_target"]
     app_dir = "satmapit" if (SATMAPIT_APPS_DIR / tc.app).is_dir() else "applications"
-    r = run_cmd(["make", run_target, f"PROJECT={tc.app}", f"APP_DIR={app_dir}"])
+    r = run_cmd(["make", run_target, f"PROJECT={tc.app}", f"APP_DIR={app_dir}", f"CGRA_CFG={CGRA_CFG}"])
     if r.returncode != 0:
         err(f"Sim run failed for {tc.app} — skipping comparison")
         return ""
@@ -1187,7 +1228,8 @@ def _interactive_sim() -> None:
     if choice == 4:  # mcu-gen only
         dry = _ask_bool("Dry run?")
         cfg = _pick_config()
-        mb  = _ask_int("MEMORY_BANKS", default=HEEPSILON_DEFAULT_MEMORY_BANKS) or HEEPSILON_DEFAULT_MEMORY_BANKS
+        mb  = _ask_int("MEMORY_BANKS (blank = per-grid Makefile default)",
+                       default=HEEPSILON_DEFAULT_MEMORY_BANKS)
         ensure_python_deps(dry)
         apply_patches(dry)
         mcu_gen(dry, config=cfg, memory_banks=mb)
@@ -1353,6 +1395,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Also run auto-discovered X-HEEP apps (disabled by default)")
 
     build = p.add_argument_group("build control  [sim / both]")
+    build.add_argument("--cgra-cfg", metavar="GRID", default=None,
+                       choices=available_cgra_cfgs() or None,
+                       help="CGRA grid to run on (%(choices)s). Runs mcu-gen "
+                            "automatically if the generated tree belongs to a "
+                            "different grid. Default: whatever is generated now.")
     build.add_argument("--patch",      action="store_true",
                        help="Apply source patches before running tests")
     build.add_argument("--gen",        action="store_true",
@@ -1372,7 +1419,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help=f"hjson template for mcu-gen (default: {DEFAULT_CONFIG}; choices: {config_names})")
     build.add_argument("--memory-banks", type=int, default=HEEPSILON_DEFAULT_MEMORY_BANKS,
                        metavar="N",
-                       help=f"RAM bank count passed to mcu-gen; must match the synthesised bitstream (default: {HEEPSILON_DEFAULT_MEMORY_BANKS})")
+                       help="RAM bank count passed to mcu-gen; must match the synthesised bitstream "
+                            "(default: the per-CGRA_CFG Makefile value — 4x4: 6, others: 12)")
     build.add_argument("--all-configs", action="store_true",
                        help="Run the full sim pipeline for every build config (matrix mode)")
     build.add_argument("--simulator", default=None,
@@ -1457,6 +1505,25 @@ def main() -> None:
             marker = " (default)" if c.name == DEFAULT_CONFIG else ""
             print(f"  {c.name:12s} {c.description}{marker}")
         return
+
+    # ── CGRA grid ───────────────────────────────────────────────────────────────
+    # Only one grid's generated files can exist in the source tree at a time, so
+    # asking for a different grid than the one that is generated means running
+    # mcu-gen first. Doing it here saves the caller a separate make invocation
+    # and guarantees the two never disagree.
+    if args.cgra_cfg and args.cgra_cfg != _stamped_cgra_cfg():
+        info(f"Generated tree is for CGRA_CFG={_stamped_cgra_cfg() or '<none>'}, "
+             f"switching to {args.cgra_cfg}")
+        mcu_gen(dry, conda, cfg, memory_banks=args.memory_banks)
+    # A missing simulator otherwise surfaces late as "skipping config" with no
+    # hint of what to do. Only relevant when actually simulating.
+    if (target in ("sim", "both") and not dry and not args.only_gen
+            and not args.only_patches and not _sim_built(sim)
+            and not (args.build_sim or args.rebuild or args.only_build)):
+        err(f"No {sim} simulator for CGRA_CFG={CGRA_CFG} "
+            f"({sim_log_dir(sim)} missing).")
+        err(f"  Build it once with:  ./run.py --cgra-cfg {CGRA_CFG} --build-sim")
+        sys.exit(1)
 
     # ── --only-* shortcuts ──────────────────────────────────────────────────────
     if args.only_patches:
