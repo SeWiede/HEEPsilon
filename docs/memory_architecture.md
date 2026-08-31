@@ -82,6 +82,14 @@ make run-verilator PROJECT=<app> MEMORY_BANKS=6
 
 `mcu-gen` regenerates the linker script and the simulated hardware RAM size. Both must use the same value.
 
+**On FPGA the bitstream is the third thing that must agree**, and it is the one you cannot change without re-synthesising. A 12-bank linker script on a 6-bank bitstream places data above 192KB in memory that does not exist — no error, no UART, just a dead run. To check what a bitstream actually contains, count the SRAM instances in its synthesis log:
+
+```bash
+grep -oE 'gen_sram\[[0-9]+\]' build/<root>/<board>-vivado/eslepfl_systems_heepsilon_0.runs/synth_1/runme.log | sort -u
+```
+
+The archived 4x4 ZCU104 bitstream has 6. `MEMORY_BANKS` therefore now defaults per CGRA grid in the Makefile (4x4: 6, 3x3/5x5: 12) instead of needing to be passed by hand — see `docs/cgra_grid_configs.md`.
+
 ---
 
 ## Bus Topology

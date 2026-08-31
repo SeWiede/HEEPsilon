@@ -375,6 +375,36 @@ loops is not supported by SAT-MapIt in its current form.
 
 ---
 
+### 10. Two-array kernels: reference-arg mapping (FIXED) and a residual +1 (OPEN)
+
+`cgra_gen.py`'s `--ref-src` reference-call generation used to map **every** pointer
+parameter to the same first data column (`data_cols[0]`), instead of consuming
+`data_cols` in order the way it already did for multiple scalar columns.  For a
+kernel with two array parameters (e.g. `acc += a_arr[i] * b_arr[i]`), both arguments
+of the generated reference call pointed at the same buffer — the PASS/FAIL check
+silently compared CGRA output against a reference computing `a[i]*a[i]`, not
+`a[i]*b[i]`.  **Fixed**: `_build_ref_args()` / `gen_test_harness()` now consume
+`data_cols` one at a time per pointer parameter, matching pointer arguments to
+columns in appearance order.
+
+Known open issue found while fixing the above (a two-array dot-product kernel): once the
+mapping was corrected, the CGRA result was `expected + 1` in every sweep trial,
+regardless of N or the randomized data — a constant, data-independent offset, not
+a stream-alignment issue (which would scale with the data). Root cause identified
+(not yet fixed): a residual `LWI`-address-arithmetic `SMUL` survives on both array
+columns (`satmapit_parse.py`'s `lwi_pes` chain detection, caveat #5, apparently
+doesn't recognize both of two independent array-index chains in the same kernel).
+On one column it's genuinely dead (never read again — wasted cycles only). On the
+other, its result (`dest="-"`, never saved to a register) is consumed by the very
+next instruction via `SELF`/`own_res` — which is exactly the documented hardware
+gotcha in `docs/cgra_isa.md` ("Timing notes and known gotchas" → `own_res`
+latency): `own_res` right after an SMUL stall is unreliable; the fix is
+`reg_we=1` + read the named register instead of `SELF`. Distinct from sqrt's
+perfect-square issue (caveat #8) — checked, sqrt's SMUL consumer isn't in this
+same-PE-immediately-after-stall shape.
+
+---
+
 ## Full workflow example
 
 ```bash
