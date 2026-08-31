@@ -1,0 +1,24 @@
+// Copyright 2020 ETH Zurich and University of Bologna.
+// Solderpad Hardware License, Version 0.51, see LICENSE for details.
+// SPDX-License-Identifier: SHL-0.51
+//
+// 5x5 CGRA variant.  Build with:  make mcu-gen CGRA_CFG=5x5
+//
+// KMEM word width = max_columns + cmem_bk_depth_log2 + rcs_num_instr_log2
+//                 = 5 + 9 + 5 = 19 bits, well inside the 32-bit bus limit.
+{
+    cgra: {
+        num_columns: 5
+        num_rows: 5
+        max_columns: default
+        rcs_num_instr: 32
+        // Must be one of the depths hw/fpga_cgra/cgra_sram_wrapper.sv has a
+        // Xilinx BRAM IP for — 128, 512, 1024, 2048, 4096, 8192, 16384 — or
+        // FPGA synthesis dies with "Bank size not generated for NumWords".
+        // The default here would be max_columns*rcs_num_instr = 160, and the
+        // next power of two (256) has no IP either, so 512 is the smallest
+        // legal choice that still holds a full-width kernel.
+        cmem_bk_depth: 512
+        kmem_depth: 16
+    },
+}

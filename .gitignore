@@ -38,3 +38,7 @@ env.sh
 *_backup/
 zcu_backup/
 sw/satmapit/
+
+# multi-config artefacts
+fpga_builds/
+.heepsilon_active_cfg

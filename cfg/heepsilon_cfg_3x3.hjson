@@ -1,0 +1,23 @@
+// Copyright 2020 ETH Zurich and University of Bologna.
+// Solderpad Hardware License, Version 0.51, see LICENSE for details.
+// SPDX-License-Identifier: SHL-0.51
+//
+// 3x3 CGRA variant.  Build with:  make mcu-gen CGRA_CFG=3x3
+//
+// Matches the grid the X-HEEP kernel_test reference bitstreams were mapped for
+// (sw/applications/kernel_test/kernels/*/3x3/).  Those mappings rely on the
+// inter-column torus wrapping col2 -> col0, which only holds on a 3-column
+// build; on the 4x4 build col2's RCR reaches physical col3 instead.
+{
+    cgra: {
+        num_columns: 3
+        num_rows: 3
+        max_columns: default
+        rcs_num_instr: 32
+        // Default would be max_columns*rcs_num_instr = 96 (not a power of two).
+        // Pinned to 128 so CMEM_BK_DEPTH_LOG2 stays 7, identical to the 4x4
+        // build, keeping the kernel-word start_add field bit-compatible.
+        cmem_bk_depth: 128
+        kmem_depth: 16
+    },
+}
