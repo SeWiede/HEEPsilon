@@ -150,12 +150,24 @@ is a **signed byte stride** added to the counter on each access.
 |--------|----------|--------|-------------|
 | 21     | LWD      | 10101  | Load word from `rd_data_cnt`, advance counter by `imm_val` bytes. Value stored in `reg[reg_sel]` when data arrives. |
 | 22     | SWD      | 10110  | Store `mux_a` to `wr_data_cnt`, advance counter by `imm_val` bytes. |
-| 23     | LWI      | 10111  | Load word from address in `mux_a` (indirect). Value stored in `reg[reg_sel]`. |
-| 24     | SWI      | 11000  | Store `mux_b` to address in `mux_a` (indirect). |
+| 23     | LWI      | 10111  | Load word from address in `mux_b` (indirect). Value stored in `reg[reg_sel]`. |
+| 24     | SWI      | 11000  | Store `mux_a` to address in `mux_b` (indirect). |
 | 25     | EXIT     | 11001  | Terminate this column. When all rows of an active column have fired EXIT, the column is marked done. When all active columns are done, the CGRA interrupt fires. |
 
 For **LWD with stride=0** (`imm_val=0`): the address counter does not advance,
 so the same address is read every time.
+
+**Operand convention for the indirect forms** (`datapath.sv:157-163`): operand
+**B carries the address**, operand **A carries the write data**. So `SWI` is
+"store A at address B", and `LWI` ignores operand A entirely. This is the
+opposite of what the operand order in the mnemonic suggests — see
+`sw/applications/cgra_loop_preempt/main.c:114` for a working encoding
+(`mux_a=0, mux_b=R1` for `LWI R0,[R1]`).
+
+**All accesses are 32-bit word accesses.** Byte enables are hardwired to
+`4'b1111` (`data_bus_handler.sv:173`); there is no byte or half-word
+load/store and no sign-extension of loaded data. Sub-word access must be done
+with shifts and masks in the datapath.
 
 ---
 
