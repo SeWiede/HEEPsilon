@@ -264,7 +264,7 @@ app: check-cfg
 	@# Guard: RISCV_XHEEP must be set (exported from env.sh before calling make)
 	@if [ -z "$(RISCV_XHEEP)" ]; then \
 	    echo "[heepsilon] ERROR: RISCV_XHEEP is not set."; \
-	    echo "  Export it first (see env.sh / CLAUDE.md):"; \
+	    echo "  Export it first (see env.sh):"; \
 	    echo "  export RISCV_XHEEP=\$$HOME/tools/riscv/corev-2024.05.30"; \
 	    exit 1; \
 	fi

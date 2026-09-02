@@ -31,8 +31,8 @@ Concrete example:
 
     → sw/satmapit/cgra_vec_sum/ (main.c + building blocks), with:
         --out-dir sw/satmapit          (default; use sw/applications when promoting)
-        --satmapit-dir $SATMAPIT_DIR or ../SAT-MapIt   (default; for --ref-src's
-                                         libclang-based extraction, see CLAUDE.md)
+        --satmapit-dir $SATMAPIT_DIR or ../SAT-MapIt   (default; supplies the
+                                         libclang used for --ref-src extraction)
         --sweep auto                   (default; sweeps N if vec_sum's `int N`
                                          parameter makes that possible, otherwise
                                          repeats randomized-input trials instead)

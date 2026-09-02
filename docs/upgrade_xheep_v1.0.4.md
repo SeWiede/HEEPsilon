@@ -259,7 +259,6 @@ causes an elaboration error. We omit it; `ext_xbar.sv` does not need it.
 | File | Change |
 |---|---|
 | `env.sh` | Verilator 4.210 → 5.040; RISCV toolchain 2022.01.17 → corev-2024.05.30 |
-| `CLAUDE.md` | Same path updates |
 | `fpga_run.py` | Same path updates |
 | `docs/fpga_workflow.md` | Same path updates |
 | `hw/rtl/heepsilon_top.sv` | New ports, DMA arrays, fifo_pkg, powergate logic |
