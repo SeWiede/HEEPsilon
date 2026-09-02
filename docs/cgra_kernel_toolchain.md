@@ -1,7 +1,21 @@
 # CGRA Kernel Toolchain
 
-This document describes the three Python tools in `util/` that automate the
-pipeline from a C loop to a runnable HEEPsilon SW application.
+This document describes the Python tools in `util/` that automate the pipeline
+from a C loop to a runnable HEEPsilon SW application.
+
+The toolchain is split into a **front end** and a **shared tail**. A front end's
+only job is to produce LLVM IR whose target loop carries
+`!{!"llvm.loop.cgra.acc"}`; `util/cgra_tail.py` then takes it the rest of the way
+(`opt -passes=cgra-extract` → SAT-MapIt mapper → `satmapit_parse.py` →
+`cgra_gen.py`). Two front ends exist:
+
+| Front end | Input | How the loop is tagged |
+|---|---|---|
+| `util/cgra_satmap.py` | C with `#pragma cgra acc` | clang emits the metadata |
+| `util/cgra_glsl.py` | GLSL compute shader | SPIR-V + MLIR, tag injected after canonicalisation — see `cgra_glsl_route.md` |
+
+Everything below the `opt` stage is common to both, so a change there affects
+both routes. `util/cgra_tail.py` is a module, not a CLI.
 
 ---
 
