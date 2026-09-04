@@ -17,6 +17,18 @@
  *
  * Sweep: CPU busy-loops for DELAY iterations before writing the flag.
  * Different delays → different CGRA iteration counts at preemption.
+ *
+ * preempt_cy measures the preemption latency: cycles from the store that sets
+ * preempt_flag to the CPU observing cgra_done.  It is an UPPER BOUND on the
+ * CGRA's stop latency -- it also contains the PLIC path and the interrupt
+ * dispatch into handler_irq_cgra().  The CGRA has physically stopped some
+ * cycles before the CPU can observe it, and software cannot separate the two:
+ * the CGRA performance counters report col_active from kernel start (and
+ * col_active already includes stall cycles), not time-since-flag.  Isolating
+ * the CGRA-internal component needs hardware support.
+ *
+ * Unit is cycles: rv_timer is configured with counter_freq == clock_freq, so
+ * one tick is one cycle (same convention as sw/applications/mmul_os).
  */
 
 #include <stdio.h>
@@ -29,6 +41,8 @@
 #include "core_v_mini_mcu.h"
 #include "rv_plic.h"
 #include "rv_plic_regs.h"
+#include "rv_timer.h"
+#include "soc_ctrl.h"
 #include "heepsilon.h"
 #include "cgra.h"
 
@@ -74,6 +88,37 @@ static const int DELAYS[] = {0, 50, 150, 300, 500};
 /* ── Globals ──────────────────────────────────────────────────────────────── */
 static volatile int cgra_done;
 static cgra_t       cgra;
+
+#define HART_ID 0
+
+static rv_timer_t timer;
+
+/* rv_timer at one tick per cycle.  Counter only: no comparator is armed and no
+ * timer IRQ is enabled, so the timer cannot perturb the CGRA interrupt whose
+ * latency this test measures. */
+static void timer_init_cy(void)
+{
+    soc_ctrl_t soc_ctrl;
+    soc_ctrl.base_addr = mmio_region_from_addr((uintptr_t)SOC_CTRL_START_ADDRESS);
+    uint32_t freq_hz   = soc_ctrl_get_frequency(&soc_ctrl);
+
+    rv_timer_init(mmio_region_from_addr((uintptr_t)RV_TIMER_AO_START_ADDRESS),
+                  (rv_timer_config_t){ .hart_count = 2, .comparator_count = 1 },
+                  &timer);
+
+    rv_timer_tick_params_t tick_params;
+    rv_timer_approximate_tick_params(freq_hz, freq_hz, &tick_params);
+    rv_timer_set_tick_params(&timer, HART_ID, tick_params);
+
+    rv_timer_counter_set_enabled(&timer, HART_ID, kRvTimerEnabled);
+}
+
+static uint64_t get_time_cy(void)
+{
+    uint64_t t;
+    rv_timer_counter_read(&timer, HART_ID, &t);
+    return t;
+}
 
 /* THE preemption address — CPU writes 1 here to stop the CGRA */
 static volatile int32_t preempt_flag;
@@ -131,6 +176,8 @@ int main(void)
     CSR_SET_BITS(CSR_REG_MIE, 1 << 11);
     cgra.base_addr = mmio_region_from_addr((uintptr_t)CGRA_PERIPH_START_ADDRESS);
 
+    timer_init_cy();
+
     build_bitstream();
     cgra_cmem_init(imem, kmem);
 
@@ -156,17 +203,22 @@ int main(void)
         while (cpu_work < delay) cpu_work++;
 
         /* Preempt: one store to one fixed address — no slot tracking */
+        uint64_t t_flag = get_time_cy();
         preempt_flag = 1;
 
         volatile int cpu_post = 0;
         while (!cgra_done) cpu_post++;
+
+        /* Upper bound: store -> CGRA stop -> PLIC -> handler -> observed here */
+        uint32_t preempt_cy = (uint32_t)(get_time_cy() - t_flag);
 
         /* Count completed iterations */
         int cgra_iters = 0;
         while (cgra_iters < MAX_ITER && output_buf[cgra_iters] != 0)
             cgra_iters++;
 
-        printf("cpu_delay=%-4d  cgra_iters=%d\n", delay, cgra_iters);
+        printf("cpu_delay=%-4d  cgra_iters=%-4d  preempt_cy=%d\n",
+               delay, cgra_iters, (int)preempt_cy);
 
         /* Verify counter values: output_buf[i] must equal i+1 */
         int errors = 0;
