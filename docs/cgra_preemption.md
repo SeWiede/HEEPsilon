@@ -50,20 +50,71 @@ No slot tracking. No output polling. No iteration knowledge. The CPU writes to o
 Tested in `sw/applications/cgra_loop_preempt` — CPU busy-loops for DELAY iterations then writes `preempt_flag = 1`:
 
 ```
-cpu_delay=0    cgra_iters=0
-cpu_delay=50   cgra_iters=67
-cpu_delay=150  cgra_iters=200
-cpu_delay=300  cgra_iters=400
-cpu_delay=500  cgra_iters=667
+cpu_delay=0     cgra_iters=5     preempt_cy=178
+cpu_delay=50    cgra_iters=72    preempt_cy=178
+cpu_delay=150   cgra_iters=205   preempt_cy=178
+cpu_delay=300   cgra_iters=405   preempt_cy=178
+cpu_delay=500   cgra_iters=672   preempt_cy=178
 ```
 
-Proportional preemption, 0 errors. The CGRA/CPU iteration ratio is ~4:3 for this workload. CPU sets the flag at any time — CGRA stops within one iteration regardless of when.
+Proportional preemption, 0 errors. Measured 2026-09-04 on Verilator 5.040 and on
+the ZCU104 (4x4 grid, 6 memory banks). **Both produce bit-identical numbers in
+every row and both columns.**
+
+The CPU sets the flag at any time — the CGRA stops within one iteration
+regardless of when.
+
+### Why the iteration counts moved
+
+An earlier, uninstrumented version of this test reported `cgra_iters` of
+0/67/200/400/667 — five lower in every row. The difference is the cost of the
+`rv_timer` read taken immediately before the store: it delays the flag write by
+roughly five CGRA iterations. That is measurement overhead in the iteration
+column, not a change in behaviour.
+
+---
+
+## Preemption Latency
+
+`preempt_cy` is **178 cycles, constant** across every delay in the sweep, in
+simulation and on hardware alike.
+
+**This is an upper bound on the CGRA's stop latency, not the stop latency
+itself.** The measured interval spans:
+
+```
+store preempt_flag = 1
+  -> CGRA reaches its next LWI, sees the flag, takes BNE to EXIT
+  -> acc_end asserted, col_status cleared
+  -> EXT_INTR_0 -> PLIC -> interrupt dispatch
+  -> handler_irq_cgra() sets cgra_done
+  -> polling loop in main() observes it, second rv_timer read
+```
+
+Everything from `acc_end` onward is CPU-side overhead the CGRA does not control.
+Software cannot separate the two halves: the CGRA performance counters report
+`col_active` only from kernel start — and `col_active` already includes stall
+cycles — never time-since-flag. Isolating the CGRA-internal component requires
+hardware support.
+
+On the constancy: the variable part of this interval (where in the 5-instruction
+kernel loop the flag write lands) is at most a few cycles, while the fixed part
+(EXIT, `acc_end`, PLIC, dispatch) dominates. Whether the total is genuinely
+phase-locked or the jitter is simply too small to surface at this resolution has
+**not** been established — the sweep varies only the CPU delay, which may not
+decorrelate the two loops.
+
+178 cycles is the end-to-end number any hardware preemption mechanism has to
+beat, measured on the same path.
 
 ---
 
 ## Timing Notes
 
-The CGRA iterates faster than a CPU busy-loop on this workload (~4:3 ratio in Verilator). The exact ratio depends on the kernel's memory access pattern.
+The CGRA iterates faster than a CPU busy-loop on this workload (~4:3 ratio). This
+was originally recorded as a Verilator observation; the ZCU104 run reproduces it
+exactly, so it is not a simulation artefact. The exact ratio depends on the
+kernel's memory access pattern.
 
 ---
 
