@@ -379,6 +379,44 @@ should assume more exist.
 
 ---
 
+## Where to pick up
+
+Roughly in order of value. The first is a decision, not an implementation task,
+and it gates the rest.
+
+1. **Decide what happens with floats.** Either declare the route
+   integer/fixed-point only (and keep rejecting float shaders, since silence is
+   the dangerous outcome), or design the fixed-point lowering — a scale the
+   shader author agrees to, applied consistently in the frontend and the host
+   buffers. Most real compute shaders are float-heavy, so this determines
+   whether the route is a niche accelerator path or a general one.
+2. **Multi-invocation dispatch.** Today one invocation's inner loop is mapped.
+   How a `local_size > 1` dispatch distributes across the grid is untouched and
+   is the real research question — not a toolchain gap.
+3. **Patch MLIR's `SPIRVToLLVM.cpp`** for runtime arrays, identified structs
+   and signedness, to drop the shader constraints above and remove the
+   `si32`→`i32` sed, the least defensible step in the pipeline. The file is
+   upstream LLVM (`mlir/lib/Conversion/SPIRVToLLVM/`), so this is not a local
+   change: the `mlir-opt` this tool runs is the packaged binary from
+   `mlir-20-tools`. Doing it means building MLIR from source and pointing
+   `--mlir-dir` at that build, or upstreaming the fix and waiting for it to
+   ship. The source is already in the SAT-MapIt tree if you want to read it —
+   note it targets MLIR-*generated* SPIR-V, not glslang output, which is why it
+   rejects so much.
+4. **Replace `cgra_gen.py`'s pragma-text `--ref-src` scan** with explicit
+   `--ref-func`/`--loop-bound` inputs, or generate expected values by executing
+   the SPIR-V on the host. Removes the last place a GLSL flow needs hand-written
+   C.
+
+**Assume more silent failures exist.** Every defect found while building this
+route reported exit code 0 — inverted loop polarity, an extra epilog
+accumulation, an empty `.ll` from nested MLIR modules, instruction selection
+disabling itself for the whole graph. Clean extraction, valid schedule, working
+build, wrong numbers. When extending this, verify against a known-good bitstream
+or a hardware run, not against the absence of an error message.
+
+---
+
 ## Verification status
 
 Four independent routes produce identical behaviour on Verilator — 624602 clock
